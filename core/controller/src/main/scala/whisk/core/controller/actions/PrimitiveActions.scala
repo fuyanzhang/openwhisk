@@ -21,7 +21,6 @@ import scala.concurrent.Future
 import scala.concurrent.Promise
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration._
-import scala.language.postfixOps
 import scala.util.Failure
 import scala.util.Success
 
@@ -30,19 +29,18 @@ import spray.http.StatusCodes._
 import spray.json._
 import whisk.common.Logging
 import whisk.common.LoggingMarkers
-import whisk.common.PrintStreamEmitter
 import whisk.common.StartMarker
 import whisk.common.TransactionId
 import whisk.core.connector.ActivationMessage
-import whisk.core.controller.BlockingInvokeTimeout
 import whisk.core.controller.WhiskServices
+import whisk.core.controller.WhiskActionsApi
 import whisk.core.database.NoDocumentException
 import whisk.core.entity._
 import whisk.core.entity.types.ActivationStore
 import whisk.core.entity.types.EntityStore
 import whisk.utils.ExecutionContextFactory.FutureExtensions
 
-protected[actions] trait PrimitiveActions extends Logging {
+protected[actions] trait PrimitiveActions {
     /** The core collections require backend services to be injected in this trait. */
     services: WhiskServices =>
 
@@ -52,16 +50,16 @@ protected[actions] trait PrimitiveActions extends Logging {
     /** An execution context for futures. */
     protected implicit val executionContext: ExecutionContext
 
+    protected implicit val logging: Logging
+
     /** Database service to CRUD actions. */
     protected val entityStore: EntityStore
 
     /** Database service to get activations. */
     protected val activationStore: ActivationStore
 
-    private implicit val emitter = this: PrintStreamEmitter
-
     /** Max duration for active ack. */
-    protected val activeAckTimeout = 30 seconds
+    protected val activeAckTimeout = WhiskActionsApi.maxWaitForBlockingActivation
 
     /**
      * Gets document from datastore to confirm a valid action activation then posts request to loadbalancer.
@@ -109,8 +107,8 @@ protected[actions] trait PrimitiveActions extends Logging {
             cause = cause)
 
         val start = transid.started(this, LoggingMarkers.CONTROLLER_LOADBALANCER, s"[POST] action activation id: ${message.activationId}")
-        val (postedFuture, activationResponse) = loadBalancer.publish(action, message, activeAckTimeout)
-        postedFuture flatMap { _ =>
+        val postedFuture = loadBalancer.publish(action, message, activeAckTimeout)
+        postedFuture flatMap { activationResponse =>
             transid.finished(this, start)
             if (blocking) {
                 waitForActivationResponse(user, message.activationId, timeout, activationResponse) map {
@@ -140,17 +138,17 @@ protected[actions] trait PrimitiveActions extends Logging {
         val promise = Promise[WhiskActivation]
         val docid = DocId(WhiskEntity.qualifiedName(user.namespace.toPath, activationId))
 
-        info(this, s"[POST] action activation will block on result up to $totalWaitTime")
+        logging.info(this, s"[POST] action activation will block on result up to $totalWaitTime")
 
         // the active ack will timeout after specified duration, causing the db polling to kick in
         activationResponse map {
             activation => promise.trySuccess(activation)
         } onFailure {
             case t: TimeoutException =>
-                info(this, s"[POST] switching to poll db, active ack expired")
+                logging.info(this, s"[POST] switching to poll db, active ack expired")
                 pollDbForResult(docid, activationId, promise)
             case t: Throwable =>
-                error(this, s"[POST] switching to poll db, active ack exception: ${t.getMessage}")
+                logging.info(this, s"[POST] switching to poll db, active ack exception: ${t.getMessage}")
                 pollDbForResult(docid, activationId, promise)
         }
 
@@ -187,14 +185,14 @@ protected[actions] trait PrimitiveActions extends Logging {
             } onFailure {
                 case e: NoDocumentException =>
                     Thread.sleep(500)
-                    debug(this, s"[POST] action activation not yet timed out, will poll for result")
+                    logging.debug(this, s"[POST] action activation not yet timed out, will poll for result")
                     pollDbForResult(docid, activationId, promise)
                 case t: Throwable =>
-                    error(this, s"[POST] action activation failed while waiting on result: ${t.getMessage}")
+                    logging.error(this, s"[POST] action activation failed while waiting on result: ${t.getMessage}")
                     promise.tryFailure(t)
             }
         } else {
-            error(this, s"[POST] action activation timed out, terminated polling for result")
+            logging.info(this, s"[POST] action activation timed out, terminated polling for result")
         }
     }
 }

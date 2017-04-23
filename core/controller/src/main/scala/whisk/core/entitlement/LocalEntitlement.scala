@@ -21,11 +21,11 @@ import scala.concurrent.Future
 
 import Privilege.Privilege
 import akka.actor.ActorSystem
+import whisk.common.Logging
 import whisk.common.TransactionId
 import whisk.core.WhiskConfig
 import whisk.core.entity.Subject
 import whisk.core.loadBalancer.LoadBalancer
-import whisk.core.iam.NamespaceProvider
 
 private object LocalEntitlementProvider {
     /** Poor mans entitlement matrix. Must persist to datastore eventually. */
@@ -34,10 +34,10 @@ private object LocalEntitlementProvider {
 
 protected[core] class LocalEntitlementProvider(
     private val config: WhiskConfig,
-    private val loadBalancer: LoadBalancer,
-    private val iam: NamespaceProvider)(
-        implicit actorSystem: ActorSystem)
-    extends EntitlementProvider(config, loadBalancer, iam) {
+    private val loadBalancer: LoadBalancer)(
+        implicit actorSystem: ActorSystem,
+        logging: Logging)
+    extends EntitlementProvider(config, loadBalancer) {
 
     private implicit val executionContext = actorSystem.dispatcher
 
@@ -48,7 +48,7 @@ protected[core] class LocalEntitlementProvider(
         synchronized {
             val key = (subject, resource.id)
             matrix.put(key, matrix.get(key) map { _ + right } getOrElse Set(right))
-            info(this, s"granted user '$subject' privilege '$right' for '$resource'")
+            logging.info(this, s"granted user '$subject' privilege '$right' for '$resource'")
             true
         }
     }
@@ -58,7 +58,7 @@ protected[core] class LocalEntitlementProvider(
         synchronized {
             val key = (subject, resource.id)
             val newrights = matrix.get(key) map { _ - right } map { matrix.put(key, _) }
-            info(this, s"revoked user '$subject' privilege '$right' for '$resource'")
+            logging.info(this, s"revoked user '$subject' privilege '$right' for '$resource'")
             true
         }
     }

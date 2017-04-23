@@ -18,9 +18,7 @@ package whisk.core.connector
 
 import scala.util.Try
 
-import spray.json.DefaultJsonProtocol
-import spray.json.JsObject
-import spray.json.pimpString
+import spray.json._
 import whisk.common.TransactionId
 import whisk.core.entity.ActivationId
 import whisk.core.entity.DocRevision
@@ -77,13 +75,8 @@ case class ActivationMessage(
 }
 
 object ActivationMessage extends DefaultJsonProtocol {
-    private val INVOKE = "invoke"
 
-    def invoker(instance: Int) = INVOKE + instance
-
-    def apply(msg: String): Try[ActivationMessage] = Try {
-        serdes.read(msg.parseJson)
-    }
+    def parse(msg: String) = Try(serdes.read(msg.parseJson))
 
     private implicit val fqnSerdes = FullyQualifiedEntityName.serdes
     implicit val serdes = jsonFormat8(ActivationMessage.apply)
@@ -106,10 +99,15 @@ case class CompletionMessage(
 }
 
 object CompletionMessage extends DefaultJsonProtocol {
-
-    def apply(msg: String): Try[CompletionMessage] = Try {
-        serdes.read(msg.parseJson)
-    }
-
+    def parse(msg: String) = Try(serdes.read(msg.parseJson))
     implicit val serdes = jsonFormat2(CompletionMessage.apply)
+}
+
+case class PingMessage(name: String) extends Message {
+    override def serialize = PingMessage.serdes.write(this).compactPrint
+}
+
+object PingMessage extends DefaultJsonProtocol {
+    def parse(msg: String) = Try(serdes.read(msg.parseJson))
+    implicit val serdes = jsonFormat(PingMessage.apply _, "name")
 }

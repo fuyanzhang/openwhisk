@@ -52,9 +52,10 @@ public class Proxy {
     }
 
     private static void writeResponse(HttpExchange t, int code, String content) throws IOException {
-        t.sendResponseHeaders(code, content.length());
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        t.sendResponseHeaders(code, bytes.length);
         OutputStream os = t.getResponseBody();
-        os.write(content.getBytes());
+        os.write(bytes);
         os.close();
     }
 
@@ -79,7 +80,7 @@ public class Proxy {
 
                 JsonObject message = inputObject.getAsJsonObject("value");
                 String mainClass = message.getAsJsonPrimitive("main").getAsString();
-                String base64Jar = message.getAsJsonPrimitive("jar").getAsString();
+                String base64Jar = message.getAsJsonPrimitive("code").getAsString();
 
                 // FIXME: this is obviously not very useful. The idea is that we
                 // will implement/use
@@ -118,7 +119,7 @@ public class Proxy {
             try {
                 InputStream is = t.getRequestBody();
                 JsonParser parser = new JsonParser();
-                JsonElement ie = parser.parse(new BufferedReader(new InputStreamReader(is, "UTF-8")));
+                JsonElement ie = parser.parse(new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8)));
                 JsonObject inputObject = ie.getAsJsonObject().getAsJsonObject("value");
 
                 HashMap<String, String> env = new HashMap<String, String>();

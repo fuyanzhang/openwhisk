@@ -43,10 +43,9 @@ type Action struct {
 
 type Exec struct {
     Kind        string      `json:"kind,omitempty"`
-    Code        *string      `json:"code,omitempty"`
+    Code        *string     `json:"code,omitempty"`
     Image       string      `json:"image,omitempty"`
     Init        string      `json:"init,omitempty"`
-    Jar         string      `json:"jar,omitempty"`
     Main        string      `json:"main,omitempty"`
     Components  []string    `json:"components,omitempty"`    // List of fully qualified actions
 }
@@ -85,9 +84,9 @@ func (s *ActionService) List(packageName string, options *ActionListOptions) ([]
     }
     Debug(DbgError, "Action list route with options: %s\n", route)
 
-    req, err := s.client.NewRequestUrl("GET", routeUrl, nil, IncludeNamespaceInUrl)
+    req, err := s.client.NewRequestUrl("GET", routeUrl, nil, IncludeNamespaceInUrl, AppendOpenWhiskPathPrefix, EncodeBodyAsJson, AuthRequired)
     if err != nil {
-        Debug(DbgError, "http.NewRequest(GET, %s, nil) error: '%s'\n", routeUrl, err)
+        Debug(DbgError, "http.NewRequestUrl(GET, %s, nil, IncludeNamespaceInUrl, AppendOpenWhiskPathPrefix, EncodeBodyAsJson, AuthRequired) error: '%s'\n", routeUrl, err)
         errMsg := wski18n.T("Unable to create HTTP request for GET '{{.route}}': {{.err}}",
             map[string]interface{}{"route": routeUrl, "err": err})
         whiskErr := MakeWskErrorFromWskError(errors.New(errMsg), err, EXITCODE_ERR_NETWORK, DISPLAY_MSG,
@@ -95,7 +94,7 @@ func (s *ActionService) List(packageName string, options *ActionListOptions) ([]
         return nil, nil, whiskErr
     }
 
-    resp, err := s.client.Do(req, &actions)
+    resp, err := s.client.Do(req, &actions, ExitWithSuccessOnTimeout)
     if err != nil {
         Debug(DbgError, "s.client.Do() error - HTTP req %s; error '%s'\n", req.URL.String(), err)
         return nil, resp, err
@@ -122,7 +121,7 @@ func (s *ActionService) Insert(action *Action, overwrite bool) (*Action, *http.R
     }
 
     a := new(Action)
-    resp, err := s.client.Do(req, &a)
+    resp, err := s.client.Do(req, &a, ExitWithSuccessOnTimeout)
     if err != nil {
         Debug(DbgError, "s.client.Do() error - HTTP req %s; error '%s'\n", req.URL.String(), err)
         return nil, resp, err
@@ -148,7 +147,7 @@ func (s *ActionService) Get(actionName string) (*Action, *http.Response, error) 
     }
 
     a := new(Action)
-    resp, err := s.client.Do(req, &a)
+    resp, err := s.client.Do(req, &a, ExitWithSuccessOnTimeout)
     if err != nil {
         Debug(DbgError, "s.client.Do() error - HTTP req %s; error '%s'\n", req.URL.String(), err)
         return nil, resp, err
@@ -175,7 +174,7 @@ func (s *ActionService) Delete(actionName string) (*http.Response, error) {
     }
 
     a := new(Action)
-    resp, err := s.client.Do(req, a)
+    resp, err := s.client.Do(req, a, ExitWithSuccessOnTimeout)
     if err != nil {
         Debug(DbgError, "s.client.Do() error - HTTP req %s; error '%s'\n", req.URL.String(), err)
         return resp, err
@@ -184,11 +183,13 @@ func (s *ActionService) Delete(actionName string) (*http.Response, error) {
     return resp, nil
 }
 
-func (s *ActionService) Invoke(actionName string, payload interface{}, blocking bool) (*Activation, *http.Response, error) {
+func (s *ActionService) Invoke(actionName string, payload interface{}, blocking bool, result bool) (map[string]interface {}, *http.Response, error) {
+    var res map[string]interface {}
+
     // Encode resource name as a path (with no query params) before inserting it into the URI
     // This way any '?' chars in the name won't be treated as the beginning of the query params
     actionName = (&url.URL{Path: actionName}).String()
-    route := fmt.Sprintf("actions/%s?blocking=%t", actionName, blocking)
+    route := fmt.Sprintf("actions/%s?blocking=%t&result=%t", actionName, blocking, result)
     Debug(DbgInfo, "HTTP route: %s\n", route)
 
     req, err := s.client.NewRequest("POST", route, payload, IncludeNamespaceInUrl)
@@ -201,12 +202,12 @@ func (s *ActionService) Invoke(actionName string, payload interface{}, blocking 
         return nil, nil, whiskErr
     }
 
-    activation := new(Activation)
-    resp, err := s.client.Do(req, &activation)
+    resp, err := s.client.Do(req, &res, blocking)
+
     if err != nil {
-        Debug(DbgError, "s.client.Do() error - HTTP req %s; error '%s'\n", req.URL.String(), err)
-        return activation, resp, err
+      Debug(DbgError, "s.client.Do() error - HTTP req %s; error '%s'\n", req.URL.String(), err)
+      return res, resp, err
     }
 
-    return activation, resp, nil
+    return res, resp, nil
 }

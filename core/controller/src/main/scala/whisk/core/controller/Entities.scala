@@ -16,14 +16,10 @@
 
 package whisk.core.controller
 
-import scala.concurrent.Future
 import scala.language.postfixOps
-import scala.util.Failure
-import scala.util.Success
 import scala.util.Try
 
 import shapeless.HNil
-import spray.http.StatusCodes.InternalServerError
 import spray.http.StatusCodes.RequestEntityTooLarge
 import spray.httpx.SprayJsonSupport._
 import spray.routing.Directive0
@@ -31,28 +27,35 @@ import spray.routing.Directives
 import spray.routing.RequestContext
 import spray.routing.Route
 import whisk.common.TransactionId
-import whisk.core.entitlement.Privilege.ACTIVATE
-import whisk.core.entitlement.Privilege.DELETE
-import whisk.core.entitlement.Privilege.PUT
-import whisk.core.entitlement.Privilege.Privilege
-import whisk.core.entitlement.Privilege.READ
+import whisk.core.entitlement.Privilege._
 import whisk.core.entitlement.Resource
-import whisk.core.entity.EntityName
-import whisk.core.entity.EntityPath
-import whisk.core.entity.FullyQualifiedEntityName
-import whisk.core.entity.Identity
-import whisk.core.entity.LimitedWhiskEntityPut
-import whisk.core.entity.Parameters
+import whisk.core.entity._
+import whisk.core.entity.ActivationEntityLimit
+import whisk.core.entity.size._
 import whisk.http.ErrorResponse.terminate
+import whisk.http.Messages
 
-protected[controller] trait ValidateEntitySize extends Directives {
-    protected def validateSize(check: => Boolean)(implicit tid: TransactionId) = new Directive0 {
-        def happly(f: HNil => Route) = if (check) {
-            f(HNil)
-        } else {
-            terminate(RequestEntityTooLarge, "request entity too large")
+protected[controller] trait ValidateRequestSize extends Directives {
+    protected def validateSize(check: => Option[SizeError])(
+        implicit tid: TransactionId) = new Directive0 {
+        def happly(f: HNil => Route) = {
+            check map {
+                case e: SizeError => terminate(RequestEntityTooLarge, Messages.entityTooBig(e))
+            } getOrElse f(HNil)
         }
     }
+
+    /** Checks if request entity is within allowed length range. */
+    protected def isWhithinRange(length: Long) = {
+        if (length <= allowedActivationEntitySize) {
+            None
+        } else Some {
+            SizeError(fieldDescriptionForSizeError, length.B, allowedActivationEntitySize.B)
+        }
+    }
+
+    protected val allowedActivationEntitySize: Long = ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT.toBytes
+    protected val fieldDescriptionForSizeError = "Request"
 }
 
 /** A trait implementing the basic operations on WhiskEntities in support of the various APIs. */
@@ -60,7 +63,7 @@ trait WhiskCollectionAPI
     extends Directives
     with AuthenticatedRouteProvider
     with AuthorizedRouteProvider
-    with ValidateEntitySize
+    with ValidateRequestSize
     with ReadOps
     with WriteOps {
 
@@ -96,9 +99,15 @@ trait WhiskCollectionAPI
                             create(user, FullyQualifiedEntityName(resource.namespace, name))
                         }
                     }
-                case ACTIVATE => activate(user, FullyQualifiedEntityName(resource.namespace, name), resource.env)
-                case DELETE   => remove(user, FullyQualifiedEntityName(resource.namespace, name))
-                case _        => reject
+                case ACTIVATE =>
+                    extract(_.request.entity.data.length) { length =>
+                        validateSize(isWhithinRange(length))(transid) {
+                            activate(user, FullyQualifiedEntityName(resource.namespace, name), resource.env)
+                        }
+                    }
+
+                case DELETE => remove(user, FullyQualifiedEntityName(resource.namespace, name))
+                case _      => reject
             }
             case None => op match {
                 case READ =>
@@ -107,39 +116,30 @@ trait WhiskCollectionAPI
                     // produce all entities in the requested namespace UNLESS the subject is
                     // entitled to them which for now means they own the namespace. If the
                     // subject does not own the namespace, then exclude packages that are private
-                    val checkIfSubjectOwnsResource = if (listRequiresPrivateEntityFilter) {
-                        if (resource.namespace.root.asString == user.subject.asString) {
-                            // bypass iam if namespace is owned by subject
-                            // don't need to exclude private packages owned by subject
-                            Future.successful(false)
-                        } else {
-                            iam.namespaces(user.subject) map {
-                                // don't need to exclude private packages in any namespace owned by subject
-                                _.contains(resource.namespace.root.asString) == false
-                            }
-                        }
-                    } else Future.successful(false)
+                    val excludePrivate = listRequiresPrivateEntityFilter && resource.namespace.root != user.namespace
+                    logging.info(this, s"[LIST] exclude private entities: required == $excludePrivate")
+                    list(user, resource.namespace, excludePrivate)
 
-                    onComplete(checkIfSubjectOwnsResource) {
-                        case Success(excludePrivate) =>
-                            info(this, s"[LIST] exclude private entities: required == $excludePrivate")
-                            list(user, resource.namespace, excludePrivate)
-                        case Failure(r: RejectRequest) =>
-                            info(this, s"[LIST] namespaces lookup failed: ${r.message}")
-                            terminate(r.code, r.message)
-                        case Failure(t) =>
-                            error(this, s"[LIST] namespaces lookup failed: ${t.getMessage}")
-                            terminate(InternalServerError, t.getMessage)
-
-                    }
                 case _ => reject
             }
         }
     }
 
     /** Validates entity name from the matched path segment. */
+    protected val segmentDescriptionForSizeError = "Name segement"
+
     protected override final def entityname(s: String) = {
-        validate(isEntity(s), s"name '$s' contains illegal characters") & extract(_ => s)
+        validate(isEntity(s), {
+            if (s.length > EntityName.ENTITY_NAME_MAX_LENGTH) {
+                Messages.entityNameTooLong(
+                    SizeError(
+                        segmentDescriptionForSizeError,
+                        s.length.B,
+                        EntityName.ENTITY_NAME_MAX_LENGTH.B))
+            } else {
+                Messages.entityNameIllegal
+            }
+        }) & extract(_ => s)
     }
 
     /** Confirms that a path segment is a valid entity name. Used to reject invalid entity names. */

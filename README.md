@@ -2,6 +2,7 @@
 
 [![Build Status](https://travis-ci.org/openwhisk/openwhisk.svg?branch=master)](https://travis-ci.org/openwhisk/openwhisk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
+[![Join Slack](https://img.shields.io/badge/join-slack-9B69A0.svg)](http://slack.openwhisk.org/)
 
 OpenWhisk is a cloud-first distributed event-based programming service. It provides a programming model to upload event handlers to a cloud service, and register the handlers to respond to various events. Learn more at http://openwhisk.org or try it on [IBM Bluemix](https://ibm.biz/openwhisk).
 
@@ -31,7 +32,7 @@ cd openwhisk/tools/vagrant
 
 Wait for hello action output:
 ```
-wsk action invoke /whisk.system/utils/echo -p message hello --blocking --result
+wsk action invoke /whisk.system/utils/echo -p message hello --result
 {
     "message": "hello"
 }
@@ -76,4 +77,4 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 Report bugs, ask questions and request features [here on GitHub](../../issues).
 
-You can also join our slack channel and chat with developers.   To get access to our slack channel, please see the instructions [here](https://github.com/openwhisk/openwhisk/wiki).
+You can also join our slack channel and chat with developers. To get access to our slack channel, request an invite [here](http://slack.openwhisk.org).

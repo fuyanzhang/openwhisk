@@ -25,7 +25,6 @@ import Privilege.ACTIVATE
 import Privilege.Privilege
 import Privilege.REJECT
 import akka.actor.ActorSystem
-import akka.event.Logging.LogLevel
 import spray.http.StatusCodes.Forbidden
 import spray.http.StatusCodes.TooManyRequests
 import whisk.common.ConsulClient
@@ -33,7 +32,6 @@ import whisk.common.Logging
 import whisk.common.TransactionId
 import whisk.core.WhiskConfig
 import whisk.core.controller.RejectRequest
-import whisk.core.iam.NamespaceProvider
 import whisk.core.entity._
 import whisk.core.loadBalancer.LoadBalancer
 import whisk.http.Messages._
@@ -62,7 +60,7 @@ protected[core] case class Resource(
 }
 
 protected[core] object EntitlementProvider {
-    val requiredProperties = WhiskConfig.consulServer ++ WhiskConfig.entitlementHost ++ Map(
+    val requiredProperties = WhiskConfig.consulServer ++ Map(
         WhiskConfig.actionInvokePerMinuteDefaultLimit -> null,
         WhiskConfig.actionInvokeConcurrentDefaultLimit -> null,
         WhiskConfig.triggerFirePerMinuteDefaultLimit -> null,
@@ -79,8 +77,8 @@ protected[core] object EntitlementProvider {
  * A trait that implements entitlements to resources. It performs checks for CRUD and Acivation requests.
  * This is where enforcement of activation quotas takes place, in additional to basic authorization.
  */
-protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBalancer: LoadBalancer, iam: NamespaceProvider)(
-    implicit actorSystem: ActorSystem) extends Logging {
+protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBalancer: LoadBalancer)(
+    implicit actorSystem: ActorSystem, logging: Logging) {
 
     private implicit val executionContext = actorSystem.dispatcher
 
@@ -89,12 +87,6 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
     private val concurrentInvokeThrottler = new ActivationThrottler(config.consulServer, loadBalancer, config.actionInvokeConcurrentLimit.toInt, config.actionInvokeSystemOverloadLimit.toInt)
 
     private val consul = new ConsulClient(config.consulServer)
-
-    override def setVerbosity(level: LogLevel) = {
-        super.setVerbosity(level)
-        invokeRateThrottler.setVerbosity(level)
-        triggerRateThrottler.setVerbosity(level)
-    }
 
     /**
      * Grants a subject the right to access a resources.
@@ -130,12 +122,12 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
      * Checks action activation rate throttles for subject.
      *
      * @param user the subject to check rate throttles for
-     * @return a promise that completes with true iff the subject is within their activation quota
+     * @return a promise that completes with success iff the subject is within their activation quota
      */
     protected[core] def checkThrottles(user: Identity)(
-        implicit transid: TransactionId): Future[Boolean] = {
+        implicit transid: TransactionId): Future[Unit] = {
         val subject = user.subject
-        info(this, s"checking user '$subject' has not exceeded activation quota")
+        logging.info(this, s"checking user '$subject' has not exceeded activation quota")
 
         checkSystemOverload(ACTIVATE) orElse {
             checkThrottleOverload(!invokeRateThrottler.check(subject), tooManyRequests)
@@ -143,7 +135,7 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
             checkThrottleOverload(!concurrentInvokeThrottler.check(subject), tooManyConcurrentRequests)
         } map {
             Future.failed(_)
-        } getOrElse Future.successful(true)
+        } getOrElse Future.successful({})
     }
 
     /**
@@ -160,10 +152,10 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
      * @param user the subject to check rights for
      * @param right the privilege the subject is requesting (applies to the entire set of resources)
      * @param resource the resource the subject requests access to
-     * @return a promise that completes with true iff the subject is permitted to access the requested resource
+     * @return a promise that completes with success iff the subject is permitted to access the requested resource
      */
     protected[core] def check(user: Identity, right: Privilege, resource: Resource)(
-        implicit transid: TransactionId): Future[Boolean] = check(user, right, Set(resource))
+        implicit transid: TransactionId): Future[Unit] = check(user, right, Set(resource))
 
     /**
      * Checks if a subject has the right to access a set of resources. The entitlement may be implicit,
@@ -174,15 +166,15 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
      * @param user the subject to check rights for
      * @param right the privilege the subject is requesting (applies to the entire set of resources)
      * @param resources the set of resources the subject requests access to
-     * @return a promise that completes with true iff the subject is permitted to access all of the requested resources
+     * @return a promise that completes with success iff the subject is permitted to access all of the requested resources
      */
     protected[core] def check(user: Identity, right: Privilege, resources: Set[Resource])(
-        implicit transid: TransactionId): Future[Boolean] = {
+        implicit transid: TransactionId): Future[Unit] = {
         val subject = user.subject
 
-        val entitlementCheck = if (user.rights.contains(right)) {
+        val entitlementCheck: Future[Boolean] = if (user.rights.contains(right)) {
             if (resources.nonEmpty) {
-                info(this, s"checking user '$subject' has privilege '$right' for '${resources.mkString(",")}'")
+                logging.info(this, s"checking user '$subject' has privilege '$right' for '${resources.mkString(",")}'")
                 checkSystemOverload(right) orElse {
                     checkUserThrottle(subject, right, resources)
                 } orElse {
@@ -192,7 +184,7 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
                 } getOrElse checkPrivilege(user, right, resources)
             } else Future.successful(true)
         } else if (right != REJECT) {
-            info(this, s"supplied authkey for user '$subject' does not have privilege '$right' for '${resources.mkString(",")}'")
+            logging.info(this, s"supplied authkey for user '$subject' does not have privilege '$right' for '${resources.mkString(",")}'")
             Future.failed(RejectRequest(Forbidden))
         } else {
             Future.successful(false)
@@ -200,11 +192,14 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
 
         entitlementCheck andThen {
             case Success(r) if resources.nonEmpty =>
-                info(this, if (r) "authorized" else "not authorized")
+                logging.info(this, if (r) "authorized" else "not authorized")
             case Failure(r: RejectRequest) =>
-                info(this, s"not authorized: $r")
+                logging.info(this, s"not authorized: $r")
             case Failure(t) =>
-                error(this, s"failed while checking entitlement: ${t.getMessage}")
+                logging.error(this, s"failed while checking entitlement: ${t.getMessage}")
+        } flatMap { isAuthorized =>
+            if (isAuthorized) Future.successful({})
+            else Future.failed(RejectRequest(Forbidden))
         }
     }
 
@@ -225,23 +220,8 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
                 resource.collection.implicitRights(user, defaultNamespaces, right, resource) flatMap {
                     case true => Future.successful(true)
                     case false =>
-                        // currently allow subject to work across any of their namespaces
-                        // but this feature will be removed in future iterations, thereby removing
-                        // the iam entanglement with entitlement
-                        iam.namespaces(user.subject) flatMap {
-                            additionalNamespaces =>
-                                val newNamespacesToCheck = additionalNamespaces -- defaultNamespaces
-                                if (newNamespacesToCheck nonEmpty) {
-                                    info(this, "checking additional namespace")
-                                    resource.collection.implicitRights(user, newNamespacesToCheck, right, resource) flatMap {
-                                        case true  => Future.successful(true)
-                                        case false => entitled(user.subject, right, resource)
-                                    }
-                                } else {
-                                    info(this, "checking explicit grants")
-                                    entitled(user.subject, right, resource)
-                                }
-                        }
+                        logging.info(this, "checking explicit grants")
+                        entitled(user.subject, right, resource)
                 }
             }
         }.map { _.forall(identity) }
@@ -256,7 +236,7 @@ protected[core] abstract class EntitlementProvider(config: WhiskConfig, loadBala
     protected def checkSystemOverload(right: Privilege)(implicit transid: TransactionId): Option[RejectRequest] = {
         val systemOverload = right == ACTIVATE && concurrentInvokeThrottler.isOverloaded
         if (systemOverload) {
-            error(this, "system is overloaded")
+            logging.error(this, "system is overloaded")
             Some(RejectRequest(TooManyRequests, systemOverloaded))
         } else None
     }

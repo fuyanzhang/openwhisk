@@ -52,7 +52,6 @@ import whisk.core.entity.SemVer
 import whisk.core.entity.Status
 import whisk.core.entity.TriggerLimits
 import whisk.core.entity.WhiskActivation
-import whisk.core.entity.WhiskEntityStore
 import whisk.core.entity.WhiskTrigger
 import whisk.core.entity.WhiskTriggerPut
 import whisk.core.entity.types.ActivationStore
@@ -62,15 +61,6 @@ import spray.httpx.UnsuccessfulResponseException
 import spray.http.StatusCodes
 import whisk.core.entity.Identity
 import whisk.core.entity.FullyQualifiedEntityName
-
-/**
- * A singleton object which defines the properties that must be present in a configuration
- * in order to implement the triggers API.
- */
-object WhiskTriggersApi {
-    def requiredProperties = WhiskServices.requiredProperties ++
-        WhiskEntityStore.requiredProperties
-}
 
 /** A trait implementing the triggers API. */
 trait WhiskTriggersApi extends WhiskCollectionAPI {
@@ -132,7 +122,7 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
                     trigger: WhiskTrigger =>
                         val args = trigger.parameters.merge(payload)
                         val triggerActivationId = activationIdFactory.make()
-                        info(this, s"[POST] trigger activation id: ${triggerActivationId}")
+                        logging.info(this, s"[POST] trigger activation id: ${triggerActivationId}")
 
                         val triggerActivation = WhiskActivation(
                             namespace = user.namespace.toPath, // all activations should end up in the one space regardless trigger.namespace,
@@ -144,7 +134,7 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
                             response = ActivationResponse.success(payload orElse Some(JsObject())),
                             version = trigger.version,
                             duration = None)
-                        info(this, s"[POST] trigger activated, writing activation record to datastore: $triggerActivationId")
+                        logging.info(this, s"[POST] trigger activated, writing activation record to datastore: $triggerActivationId")
                         val saveTriggerActivation = WhiskActivation.put(activationStore, triggerActivation) map {
                             _ => triggerActivationId
                         }
@@ -171,7 +161,7 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
                                         response = ActivationResponse.success(),
                                         version = trigger.version,
                                         duration = None)
-                                    info(this, s"[POST] rule ${ruleName} activated, writing activation record to datastore")
+                                    logging.info(this, s"[POST] rule ${ruleName} activated, writing activation record to datastore")
                                     WhiskActivation.put(activationStore, ruleActivation)
 
                                     val actionNamespace = rule.action.path.root.asString
@@ -187,11 +177,11 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
 
                                     pipeline(Post(url.withPath(actionUrl + actionPath), args)) onComplete {
                                         case Success(o) =>
-                                            info(this, s"successfully invoked ${rule.action} -> ${o.fields("activationId")}")
+                                            logging.info(this, s"successfully invoked ${rule.action} -> ${o.fields("activationId")}")
                                         case Failure(usr: UnsuccessfulResponseException) if usr.response.status == StatusCodes.NotFound =>
-                                            info(this, s"action ${rule.action} could not be found")
+                                            logging.info(this, s"action ${rule.action} could not be found")
                                         case Failure(t) =>
-                                            warn(this, s"action ${rule.action} could not be invoked due to ${t.getMessage}")
+                                            logging.warn(this, s"action ${rule.action} could not be invoked due to ${t.getMessage}")
                                     }
                             }
                         }
@@ -200,8 +190,8 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
                             case Success(activationId) =>
                                 complete(OK, activationId.toJsObject)
                             case Failure(t: Throwable) =>
-                                error(this, s"[POST] storing trigger activation failed: ${t.getMessage}")
-                                terminate(InternalServerError, t.getMessage)
+                                logging.error(this, s"[POST] storing trigger activation failed: ${t.getMessage}")
+                                terminate(InternalServerError)
                         }
                 })
         }
@@ -290,7 +280,7 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
             revision[WhiskTrigger](trigger.docinfo.rev)
 
         // feed must be specified in create, and cannot be added as a trigger update
-        content.annotations flatMap { _(Parameters.Feed) } map { _ =>
+        content.annotations flatMap { _.get(Parameters.Feed) } map { _ =>
             Future failed {
                 RejectRequest(BadRequest, "A trigger feed is only permitted when the trigger is created")
             }
@@ -313,7 +303,7 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
      * or updated.
      */
     private def validateTriggerFeed(trigger: WhiskTrigger)(implicit transid: TransactionId) = {
-        trigger.annotations(Parameters.Feed) map {
+        trigger.annotations.get(Parameters.Feed) map {
             case JsString(f) if (EntityPath.validate(f)) =>
                 Future successful trigger
             case _ => Future failed {

@@ -17,12 +17,17 @@
 package whisk.core.controller.actions
 
 import scala.concurrent.Future
+import scala.concurrent.TimeoutException
+import scala.concurrent.duration.FiniteDuration
 
+import spray.http.StatusCodes.BadRequest
 import spray.json._
 import whisk.common.TransactionId
+import whisk.core.controller.RejectRequest
 import whisk.core.controller.WhiskActionsApi._
 import whisk.core.controller.WhiskServices
 import whisk.core.entity._
+import whisk.http.Messages
 
 protected[core] trait PostActionActivation extends PrimitiveActions with SequenceActions {
     /** The core collections require backend services to be injected in this trait. */
@@ -35,21 +40,24 @@ protected[core] trait PostActionActivation extends PrimitiveActions with Sequenc
      * @param action the action to activate (parameters for packaged actions must already be merged)
      * @param payload the parameters to pass to the action
      * @param blocking iff true, wait for the activation result
-     * @param waitOverride iff blocking, wait up up to the action limit or a predefined max duration if true
+     * @param waitOverride iff blocking, wait up up to the action limit or a given max duration
      * @return a future that resolves with the (activation id, and some whisk activation if a blocking invoke)
      */
-    protected[controller] def invokeAction(user: Identity, action: WhiskAction, payload: Option[JsObject], blocking: Boolean, waitOverride: Boolean = false)(
+    protected[controller] def invokeAction(user: Identity, action: WhiskAction, payload: Option[JsObject], blocking: Boolean, waitOverride: Option[FiniteDuration] = None)(
         implicit transid: TransactionId): Future[(ActivationId, Option[WhiskActivation])] = {
         action.exec match {
             // this is a topmost sequence
-            case SequenceExec(_, components) =>
+            case SequenceExec(components) =>
                 val futureSeqTuple = invokeSequence(user, action, payload, blocking, topmost = true, components, cause = None, 0)
                 futureSeqTuple map { case (activationId, wskActivation, _) => (activationId, wskActivation) }
-            case _ => {
-                val duration = action.limits.timeout()
-                val timeout = if (waitOverride) (maxWaitForBlockingActivation min duration) else duration
-                invokeSingleAction(user, action, payload, timeout + blockingInvokeGrace, blocking)
-            }
+            case supportedExec if !supportedExec.deprecated =>
+                val duration = action.limits.timeout.duration + blockingInvokeGrace
+                val timeout = waitOverride.getOrElse(duration)
+                invokeSingleAction(user, action, payload, timeout, blocking)
+            case deprecatedExec =>
+                Future.failed(RejectRequest(BadRequest, Messages.runtimeDeprecated(deprecatedExec)))
         }
     }
 }
+
+protected[controller] case class BlockingInvokeTimeout(activationId: ActivationId) extends TimeoutException

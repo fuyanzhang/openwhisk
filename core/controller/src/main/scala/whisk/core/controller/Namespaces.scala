@@ -18,10 +18,11 @@ package whisk.core.controller
 
 import scala.util.Failure
 import scala.util.Success
+
 import spray.http.StatusCodes.InternalServerError
 import spray.http.StatusCodes.OK
-import spray.json.DefaultJsonProtocol._
 import spray.httpx.SprayJsonSupport._
+import spray.json.DefaultJsonProtocol._
 import spray.routing.Directives
 import whisk.common.TransactionId
 import whisk.core.entitlement.Collection
@@ -29,28 +30,15 @@ import whisk.core.entitlement.Privilege.Privilege
 import whisk.core.entitlement.Privilege.READ
 import whisk.core.entitlement.Resource
 import whisk.core.entity.EntityPath
-import whisk.core.entity.Subject
+import whisk.core.entity.Identity
 import whisk.core.entity.WhiskAction
 import whisk.core.entity.WhiskActivation
+import whisk.core.entity.WhiskEntityQueries.listEntitiesInNamespace
 import whisk.core.entity.WhiskPackage
-import whisk.core.entity.WhiskTrigger
 import whisk.core.entity.WhiskRule
-import whisk.core.entity.WhiskEntityStore
+import whisk.core.entity.WhiskTrigger
 import whisk.core.entity.types.EntityStore
 import whisk.http.ErrorResponse.terminate
-import whisk.core.entity.WhiskEntityQueries.listEntitiesInNamespace
-import whisk.core.entity.Identity
-import whisk.core.iam.NamespaceProvider
-
-object WhiskNamespacesApi {
-    def requiredProperties = WhiskEntityStore.requiredProperties
-
-    /**
-     * A top level namespace sentinel, that is never a valid user namespace, to grant
-     * admin rights to managing this entire collection.
-     */
-    protected[controller] val rootNamespace = EntityPath(EntityPath.PATHSEP)
-}
 
 trait WhiskNamespacesApi
     extends Directives
@@ -62,9 +50,6 @@ trait WhiskNamespacesApi
 
     /** Database service to lookup entities in a namespace. */
     protected val entityStore: EntityStore
-
-    /** An identity provider. */
-    protected val iam: NamespaceProvider
 
     /**
      * Rest API for managing namespaces. Defines all the routes handled by this API. They are:
@@ -78,7 +63,7 @@ trait WhiskNamespacesApi
     override def routes(user: Identity)(implicit transid: TransactionId) = {
         pathPrefix(collection.path) {
             (collectionOps & requestMethod) { m =>
-                getNamespaces(user.subject)
+                getNamespaces(user)
             } ~ (entityOps & entityPrefix & pathEndOrSingleSlash & requestMethod) { (segment, m) =>
                 namespace(user, segment) { ns =>
                     val resource = Resource(ns, collection, None)
@@ -115,8 +100,8 @@ trait WhiskNamespacesApi
                 complete(OK, Namespaces.emptyNamespace ++ entities - WhiskActivation.collectionName)
             }
             case Failure(t) =>
-                error(this, s"[GET] namespaces failed: ${t.getMessage}")
-                terminate(InternalServerError, t.getMessage)
+                logging.error(this, s"[GET] namespaces failed: ${t.getMessage}")
+                terminate(InternalServerError)
         }
     }
 
@@ -128,18 +113,8 @@ trait WhiskNamespacesApi
      * - 401 Unauthorized
      * - 500 Internal Server Error
      */
-    private def getNamespaces(user: Subject)(implicit transid: TransactionId) = {
-        onComplete(iam.namespaces(user)) {
-            case Success(namespaces) =>
-                info(this, s"[GET] namespaces success: $namespaces")
-                complete(OK, namespaces)
-            case Failure(r: RejectRequest) =>
-                info(this, s"[GET] namespaces failed: ${r.message}")
-                terminate(r.code, r.message)
-            case Failure(t) =>
-                error(this, s"[GET] namespaces failed: ${t.getMessage}")
-                terminate(InternalServerError, t.getMessage)
-        }
+    private def getNamespaces(user: Identity)(implicit transid: TransactionId) = {
+        complete(OK, List(user.namespace))
     }
 }
 

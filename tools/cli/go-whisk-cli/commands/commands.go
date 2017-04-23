@@ -29,9 +29,10 @@ import (
 )
 
 var client *whisk.Client
+const DefaultOpenWhiskApiPath string = "/api"
 
 func setupClientConfig(cmd *cobra.Command, args []string) (error){
-    baseURL, err := getURLBase(Properties.APIHost)
+    baseURL, err := getURLBase(Properties.APIHost, DefaultOpenWhiskApiPath)
 
     // Determine if the parent command will require the API host to be set
     apiHostRequired := (cmd.Parent().Name() == "property" && cmd.Name() == "get" && (flags.property.auth ||
@@ -42,7 +43,7 @@ func setupClientConfig(cmd *cobra.Command, args []string) (error){
 
     // Display an error if the parent command requires an API host to be set, and the current API host is not valid
     if err != nil && !apiHostRequired {
-        whisk.Debug(whisk.DbgError, "getURLBase(%s) error: %s\n", Properties.APIHost, err)
+        whisk.Debug(whisk.DbgError, "getURLBase(%s, %s) error: %s\n", Properties.APIHost, DefaultOpenWhiskApiPath, err)
         errMsg := wski18n.T("The API host is not valid: {{.err}}", map[string]interface{}{"err": err})
         whiskErr := whisk.MakeWskErrorFromWskError(errors.New(errMsg), err, whisk.EXITCODE_ERR_GENERAL,
             whisk.DISPLAY_MSG, whisk.NO_DISPLAY_USAGE)
@@ -63,8 +64,7 @@ func setupClientConfig(cmd *cobra.Command, args []string) (error){
 
     if err != nil {
         whisk.Debug(whisk.DbgError, "whisk.NewClient(%#v, %#v) error: %s\n", http.DefaultClient, clientConfig, err)
-        errMsg := fmt.Sprintf(
-            wski18n.T("Unable to initialize server connection: {{.err}}", map[string]interface{}{"err": err}))
+        errMsg := wski18n.T("Unable to initialize server connection: {{.err}}", map[string]interface{}{"err": err})
         whiskErr := whisk.MakeWskErrorFromWskError(errors.New(errMsg), err, whisk.EXITCODE_ERR_GENERAL,
         whisk.DISPLAY_MSG, whisk.DISPLAY_USAGE)
         return whiskErr
@@ -204,8 +204,7 @@ func Execute() error {
 
     if err != nil {
         whisk.Debug(whisk.DbgError, "parseParams(%s) failed: %s\n", os.Args, err)
-        errMsg := fmt.Sprintf(
-            wski18n.T("Failed to parse arguments: {{.err}}", map[string]interface{}{"err":err}))
+        errMsg := wski18n.T("Failed to parse arguments: {{.err}}", map[string]interface{}{"err":err})
         whiskErr := whisk.MakeWskErrorFromWskError(errors.New(errMsg), err, whisk.EXITCODE_ERR_GENERAL,
             whisk.DISPLAY_MSG, whisk.DISPLAY_USAGE)
         return whiskErr

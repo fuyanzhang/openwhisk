@@ -47,6 +47,7 @@ func init() {
         propertyCmd,
         namespaceCmd,
         listCmd,
+        apiExperimentalCmd,
         apiCmd,
     )
 

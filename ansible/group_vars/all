@@ -3,9 +3,55 @@ prompt_user: true
 openwhisk_home: "{{ lookup('env', 'OPENWHISK_HOME')|default(playbook_dir + '/..', true) }}"
 exclude_logs_from: []
 
+# This whisk_api_localhost_name_default is used to configure nginx to permit vanity URLs for web actions
+# for local deployment. For a public deployment, the specific environment group vars should define
+# whisk_api_host_name; this is available to actions and hence must resolve from inside an action container
+# specific to the deployment (i.e., it may be an IP address rather than a hostname in some cases).
+# For a local deployment, use whisk_api_localhost_name. For a deployment which requires
+# different name resolution between the whisk_api_host_name and the whisk_api_local_host_name, both should
+# be defined so that the nginx configuration for the server name reflects the public facing naming (of the
+# edge router) even if it is different from the API host available to the actions. The precedence order for
+# configuring nginx and the SSL certificate generation is:
+#   whisk_api_localhost_name (first)
+#   whisk_api_host_name (second)
+#   whisk_api_localhost_name_default (last)
+whisk_api_localhost_name_default: "localhost"
+
 whisk:
   version:
     date: "{{ansible_date_time.iso8601}}"
+
+# list of supported runtimes (see whisk.core.entity.ExecManifest for schema)
+runtimesManifest:
+  nodejs:
+  - kind: "nodejs"
+    deprecated: true
+  - kind: "nodejs:6"
+    image: "nodejs6action"
+    default: true
+  python:
+  - kind: "python"
+    image: "python2action"
+  - kind: "python:2"
+    image: "python2action"
+    default: true
+  - kind: "python:3"
+    image: "python3action"
+  swift:
+  - kind: "swift"
+    deprecated: true
+  - kind: "swift:3"
+    image: "swift3action"
+    default: true
+  java:
+  - kind: "java"
+    attached:
+      attachmentName: "jarfile"
+      attachmentType: "application/java-archive"
+    sentinelledLogs: false
+    requireMain: true
+    image: "java8action"
+    default: true
 
 defaultLimits:
   actions:
@@ -14,11 +60,10 @@ defaultLimits:
       concurrent: 100
       concurrentInSystem: 5000
     sequence:
-      maxLength: 10
+      maxLength: 50
   triggers:
     fires:
       perMinute: 60
-
 
 # port means outer port
 controller:
@@ -51,6 +96,7 @@ invoker:
   coreshare: 2
   serializeDockerOp: true
   serializeDockerPull: true
+  useRunc: false
 
 nginx:
   version: 1.11
@@ -60,10 +106,13 @@ nginx:
     adminportal: 8443
 
 db:
-  immortal: subjects
   authkeys:
   - guest
   - whisk.system
+  whisk:
+    actions: "{{ db_prefix }}whisks"
+    activations: "{% if db_split_actions_and_activations is defined and db_split_actions_and_activations %}{{ db_prefix }}activations{% else %}{{ db_prefix }}whisks{% endif %}"
+    auth: "{{ db_prefix }}subjects"
 
 apigateway:
   port:
@@ -121,7 +170,7 @@ catalog_auth_key: "{{ openwhisk_home }}/ansible/files/auth.whisk.system"
 #     location: <local location to save the catalog>, mandatory.
 #     version: <hash of the commit>, optional, default to HEAD.
 #     repo_update: <whether to retrieve new revisions from the origin repository>,
-#                  optional, default to yes. Yes means to retrieve the new revisions, and
+#                  optional, default to no. Yes means to retrieve the new revisions, and
 #                  no means not to retrieve the new revisions.
 #
 catalog_repos:
@@ -130,4 +179,4 @@ catalog_repos:
     # Set the local location as the same level as openwhisk home, but it can be changed.
     location: "{{ openwhisk_home }}/../openwhisk-catalog"
     version: "HEAD"
-    repo_update: "yes"
+    repo_update: "no"

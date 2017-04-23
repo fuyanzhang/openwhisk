@@ -24,10 +24,8 @@ import scala.concurrent.Await
 import scala.concurrent.Future
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.duration.FiniteDuration
-import scala.util.Try
 
 import akka.actor.ActorSystem
-import akka.event.Logging.LogLevel
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.marshalling._
@@ -35,21 +33,20 @@ import akka.http.scaladsl.model._
 import akka.http.scaladsl.unmarshalling._
 import akka.stream.ActorMaterializer
 import spray.json._
-import spray.json.DefaultJsonProtocol._
-import whisk.common.HttpUtils
+import whisk.common.Logging
 import whisk.common.LoggingMarkers
-import whisk.common.NewHttpUtils
-import whisk.common.PrintStreamEmitter
 import whisk.common.TransactionId
 import whisk.core.connector.ActivationMessage
 import whisk.core.entity._
 import whisk.core.entity.ActionLimits
+import whisk.core.entity.ActivationResponse._
 
 /**
  * Reifies a whisk container - one that respects the whisk container API.
  */
 class WhiskContainer(
     originalId: TransactionId,
+    useRunc: Boolean,
     dockerhost: String,
     mounted: Boolean,
     key: ActionContainerId,
@@ -60,21 +57,24 @@ class WhiskContainer(
     policy: Option[String],
     env: Map[String, String],
     limits: ActionLimits,
-    args: Array[String] = Array(),
-    logLevel: LogLevel)
-    extends Container(originalId, dockerhost, mounted, key, Some(containerName), image, network, cpuShare, policy, limits, env, args, logLevel) {
+    args: Array[String] = Array())(
+        override implicit val logging: Logging)
+    extends Container(originalId, useRunc, dockerhost, mounted, key, Some(containerName), image, network, cpuShare, policy, limits, env, args) {
 
     var lastLogSize = 0L
-    private implicit val emitter: PrintStreamEmitter = this
+
+    /** HTTP connection to container. Initialized on /init. */
+    private var connection: Option[HttpUtils] = None
 
     /**
      * Sends initialization payload to container.
      */
     def init(args: JsObject, timeout: FiniteDuration)(implicit system: ActorSystem, transid: TransactionId): RunResult = {
-        info(this, s"sending initialization to ${this.details}")
+        val startMarker = transid.started("Invoker", LoggingMarkers.INVOKER_ACTIVATION_INIT, s"sending initialization to ${this.details}")
         // when invoking /init, don't wait longer than the timeout configured for this action
-        val result = sendPayload("/init", JsObject("value" -> args), timeout) // this will retry
-        info(this, s"initialization result: ${result}")
+        val result = sendPayload("/init", JsObject("value" -> args), timeout, retry=true)
+        val RunResult(Interval(startActivation, endActivation), _) = result
+        transid.finished("Invoker", startMarker.copy(startActivation), s"initialization result: ${result.toBriefString}", endTime = endActivation)
         result
     }
 
@@ -98,10 +98,10 @@ class WhiskContainer(
      */
     def run(msg: ActivationMessage, args: JsObject, timeout: FiniteDuration)(implicit system: ActorSystem, transid: TransactionId): RunResult = {
         val startMarker = transid.started("Invoker", LoggingMarkers.INVOKER_ACTIVATION_RUN, s"sending arguments to ${msg.action} $details")
-        val result = sendPayload("/run", constructActivationMetadata(msg, args, timeout), timeout)
+        val result = sendPayload("/run", constructActivationMetadata(msg, args, timeout), timeout, retry=false)
         // Use start and end time of the activation
         val RunResult(Interval(startActivation, endActivation), _) = result
-        transid.finished("Invoker", startMarker.copy(startActivation), s"finished running activation id: $msg.activationId", endTime = endActivation)
+        transid.finished("Invoker", startMarker.copy(startActivation), s"running result: ${result.toBriefString}", endTime = endActivation)
         result
     }
 
@@ -126,6 +126,7 @@ class WhiskContainer(
      * Tear down the container and retrieve the logs.
      */
     def teardown()(implicit transid: TransactionId): String = {
+        connection.foreach(_.close)
         getContainerLogs(containerName).toOption.getOrElse("none")
     }
 
@@ -133,10 +134,11 @@ class WhiskContainer(
      * Posts a message to the container.
      *
      * @param msg the message to post
+     * @param retry whether or not to retry on connection failure
      * @return response from container if any as array of byte
      */
-    private def sendPayload(endpoint: String, msg: JsObject, timeout: FiniteDuration)(implicit system: ActorSystem): RunResult = {
-        sendPayloadApache(endpoint, msg, timeout)
+    private def sendPayload(endpoint: String, msg: JsObject, timeout: FiniteDuration, retry: Boolean)(implicit system: ActorSystem): RunResult = {
+        sendPayloadApache(endpoint, msg, timeout, retry)
     }
 
     private def sendPayloadAkka(endpoint: String, msg: JsObject, timeout: FiniteDuration)(implicit system: ActorSystem): RunResult = {
@@ -148,7 +150,7 @@ class WhiskContainer(
 
         f.onFailure {
             case t: Throwable =>
-                warn(this, s"Exception while posting to action container ${t.getMessage}")
+                logging.warn(this, s"Exception while posting to action container ${t.getMessage}")
         }
 
         // Should never timeout because the future has a built-in timeout.
@@ -158,7 +160,7 @@ class WhiskContainer(
         val end = ContainerCounter.now()
 
         val r = f.value.get.toOption.flatten
-        RunResult(Interval(start, end), r)
+        RunResult(Interval(start, end), ???)
     }
 
     /**
@@ -183,7 +185,7 @@ class WhiskContainer(
             for (
                 entity <- Marshal(msg).to[MessageEntity];
                 request = HttpRequest(method = HttpMethods.POST, uri = uri, entity = entity);
-                response <- NewHttpUtils.singleRequest(request, timeout, retryOnTCPErrors = true, retryInterval = 100.milliseconds);
+                response <- AkkaHttpUtils.singleRequest(request, timeout, retryOnTCPErrors = true, retryInterval = 100.milliseconds);
                 responseBody <- Unmarshal(response.entity).to[String]
             ) yield {
                 Some((response.status.intValue, responseBody))
@@ -193,31 +195,22 @@ class WhiskContainer(
         }
     }
 
-    private def sendPayloadApache(endpoint: String, msg: JsObject, timeout: FiniteDuration): RunResult = {
+    private def sendPayloadApache(endpoint: String, msg: JsObject, timeout: FiniteDuration, retry: Boolean): RunResult = {
         val start = ContainerCounter.now()
-        val result = containerHostAndPort flatMap { hp =>
-            val hostWithPort = s"${hp.host}:${hp.port}"
 
-            try {
-                val connection = HttpUtils.makeHttpClient(timeout.toMillis.toInt, true)
-                val http = new HttpUtils(connection, hostWithPort)
-                val (code, bytes) = http.dopost(endpoint, msg, Map(), timeout.toMillis.toInt)
-                Try { connection.close() }
-                if (code < 100) {
-                    None
-                } else {
-                    Some(code, new String(bytes, "UTF-8"))
-                }
-            } catch {
-                case t: Throwable => {
-                    warn(this, s"Exception while posting to action container ${t.getMessage}")
-                    None
-                }
+        val result = for {
+            hp <- containerHostAndPort
+            c <- connection orElse {
+                val hostWithPort = s"${hp.host}:${hp.port}"
+                connection = Some(new HttpUtils(hostWithPort, timeout, ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT))
+                connection
             }
+        } yield {
+            c.post(endpoint, msg, retry)
         }
 
         val end = ContainerCounter.now()
-        RunResult(Interval(start, end), result)
+        RunResult(Interval(start, end), result getOrElse Left(NoHost()))
     }
 }
 

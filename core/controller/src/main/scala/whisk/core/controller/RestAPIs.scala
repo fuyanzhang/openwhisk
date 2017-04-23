@@ -16,30 +16,29 @@
 
 package whisk.core.controller
 
-import akka.actor.ActorSystem
 import scala.concurrent.ExecutionContext
 
+import akka.actor.ActorSystem
 import spray.http.AllOrigins
-import spray.http.HttpHeaders.`Access-Control-Allow-Origin`
-import spray.http.HttpHeaders.`Access-Control-Allow-Headers`
+import spray.http.HttpHeaders._
 import spray.http.StatusCodes._
 import spray.httpx.SprayJsonSupport._
-import spray.json.DefaultJsonProtocol._
 import spray.json._
+import spray.json.DefaultJsonProtocol._
 import spray.routing.Directive.pimpApply
 import spray.routing.Directives
 import spray.routing.Route
+import whisk.common.Logging
 import whisk.common.TransactionId
 import whisk.core.WhiskConfig
-import whisk.core.WhiskConfig.whiskVersionDate
 import whisk.core.WhiskConfig.whiskVersionBuildno
+import whisk.core.WhiskConfig.whiskVersionDate
 import whisk.core.entitlement._
 import whisk.core.entity._
+import whisk.core.entity.ActivationId.ActivationIdGenerator
 import whisk.core.entity.types._
 import whisk.core.loadBalancer.LoadBalancerService
-import akka.event.Logging.LogLevel
-import whisk.core.entity.ActivationId.ActivationIdGenerator
-import whisk.core.iam.NamespaceProvider
+import RestApiCommons._
 
 /**
  * Abstract class which provides basic Directives which are used to construct route structures
@@ -78,20 +77,40 @@ abstract protected[controller] class RestAPIVersion(
 }
 
 /**
- * A singleton object which defines properties needed to instantiate a service for v1
+ * A singleton object which defines properties needed to instantiate a service for v1 or v2
  * of the REST API.
  */
-protected[controller] object RestAPIVersion_v1 {
+protected[controller] object RestApiCommons {
     def requiredProperties =
         WhiskConfig.whiskVersion ++
-            WhiskServices.requiredProperties ++
+            WhiskAuthStore.requiredProperties ++
+            WhiskEntityStore.requiredProperties ++
+            WhiskActivationStore.requiredProperties ++
+            WhiskConfig.consulServer ++
+            EntitlementProvider.requiredProperties ++
             WhiskActionsApi.requiredProperties ++
-            WhiskTriggersApi.requiredProperties ++
-            WhiskRulesApi.requiredProperties ++
-            WhiskActivationsApi.requiredProperties ++
-            WhiskPackagesApi.requiredProperties ++
             Authenticate.requiredProperties ++
             Collection.requiredProperties
+
+    /**
+     * The web actions API is available in both v1 and v2.
+     * It handles web actions.
+     */
+    protected[controller] class WebActionsApi(
+        override val webInvokePathSegments: Seq[String],
+        override val webApiDirectives: WebApiDirectives)(
+            implicit override val authStore: AuthStore,
+            implicit val entityStore: EntityStore,
+            override val activationStore: ActivationStore,
+            override val entitlementProvider: EntitlementProvider,
+            override val activationIdFactory: ActivationIdGenerator,
+            override val loadBalancer: LoadBalancerService,
+            override val consulServer: String,
+            override val actorSystem: ActorSystem,
+            override val executionContext: ExecutionContext,
+            override val logging: Logging,
+            override val whiskConfig: WhiskConfig)
+        extends WhiskWebActionsApi with WhiskServices
 }
 
 /**
@@ -108,16 +127,22 @@ protected[controller] trait RespondWithHeaders extends Directives {
 /**
  * An object which creates the Routes that define v1 of the whisk REST API.
  */
-protected[controller] class RestAPIVersion_v1(
-    config: WhiskConfig,
-    verbosity: LogLevel,
-    implicit val actorSystem: ActorSystem)
-    extends RestAPIVersion("v1", config(whiskVersionDate), config(whiskVersionBuildno))
+protected[controller] class RestAPIVersion_v1()(
+    implicit val authStore: AuthStore,
+    implicit val entityStore: EntityStore,
+    implicit val activationStore: ActivationStore,
+    implicit val entitlementProvider: EntitlementProvider,
+    implicit val activationIdFactory: ActivationIdGenerator,
+    implicit val loadBalancer: LoadBalancerService,
+    implicit val consulServer: String,
+    implicit val actorSystem: ActorSystem,
+    implicit val executionContext: ExecutionContext,
+    implicit val logging: Logging,
+    implicit val whiskConfig: WhiskConfig)
+    extends RestAPIVersion("v1", whiskConfig(whiskVersionDate), whiskConfig(whiskVersionBuildno))
     with Authenticate
     with AuthenticatedRoute
     with RespondWithHeaders {
-
-    implicit val executionContext = actorSystem.dispatcher
 
     /**
      * Here is the key method: it defines the Route (route tree) which implement v1 of the REST API.
@@ -139,7 +164,9 @@ protected[controller] class RestAPIVersion_v1(
                                     rules.routes(user) ~
                                     activations.routes(user) ~
                                     packages.routes(user)
-                            } ~ meta.routes(user)
+                            } ~ webexp.routes(user)
+                } ~ {
+                    webexp.routes()
                 } ~ pathPrefix(swaggeruipath) {
                     getFromDirectory("/swagger-ui/")
                 } ~ path(swaggeruipath) {
@@ -149,162 +176,100 @@ protected[controller] class RestAPIVersion_v1(
                 } ~ options {
                     complete(OK)
                 }
-            }
-        } ~ internalInvokerHealth
-    }
-
-    // initialize datastores
-    protected implicit val authStore = WhiskAuthStore.datastore(config)
-    protected implicit val entityStore = WhiskEntityStore.datastore(config)
-    protected implicit val activationStore = WhiskActivationStore.datastore(config)
-
-    // initialize backend services
-    protected implicit val consulServer = WhiskServices.consulServer(config)
-    protected implicit val loadBalancer = WhiskServices.makeLoadBalancerComponent(config)
-    protected implicit val iamProvider = WhiskServices.iamProvider(config)
-    protected implicit val entitlementService = WhiskServices.entitlementService(config, loadBalancer, iamProvider)
-    protected implicit val activationId = new ActivationIdGenerator {}
-
-    // register collections and set verbosities on datastores and backend services
-    Collection.initialize(entityStore, verbosity)
-    authStore.setVerbosity(verbosity)
-    entityStore.setVerbosity(verbosity)
-    activationStore.setVerbosity(verbosity)
-    iamProvider.setVerbosity(verbosity)
-    entitlementService.setVerbosity(verbosity)
-
-    private val namespaces = new NamespacesApi(apipath, apiversion, verbosity)
-    private val actions = new ActionsApi(apipath, apiversion, verbosity)
-    private val triggers = new TriggersApi(apipath, apiversion, verbosity)
-    private val rules = new RulesApi(apipath, apiversion, verbosity)
-    private val activations = new ActivationsApi(apipath, apiversion, verbosity)
-    private val packages = new PackagesApi(apipath, apiversion, verbosity)
-    private val meta = new MetasApi(apipath, apiversion, verbosity)
-
-    class NamespacesApi(
-        val apipath: String,
-        val apiversion: String,
-        val verbosity: LogLevel)(
-            implicit override val entityStore: EntityStore,
-            override val iam: NamespaceProvider,
-            override val entitlementProvider: EntitlementProvider,
-            override val executionContext: ExecutionContext)
-        extends WhiskNamespacesApi {
-        setVerbosity(verbosity)
-    }
-
-    class ActionsApi(
-        val apipath: String,
-        val apiversion: String,
-        val verbosity: LogLevel)(
-            implicit override val actorSystem: ActorSystem,
-            override val entityStore: EntityStore,
-            override val activationStore: ActivationStore,
-            override val iam: NamespaceProvider,
-            override val entitlementProvider: EntitlementProvider,
-            override val activationIdFactory: ActivationIdGenerator,
-            override val loadBalancer: LoadBalancerService,
-            override val consulServer: String,
-            override val executionContext: ExecutionContext)
-        extends WhiskActionsApi with WhiskServices {
-        override val whiskConfig = config
-        setVerbosity(verbosity)
-        info(this, s"actionSequenceLimit '${config.actionSequenceLimit}'")
-        assert(config.actionSequenceLimit.toInt > 0)
-    }
-
-    class TriggersApi(
-        val apipath: String,
-        val apiversion: String,
-        val verbosity: LogLevel)(
-            implicit override val actorSystem: ActorSystem,
-            implicit override val entityStore: EntityStore,
-            override val iam: NamespaceProvider,
-            override val entitlementProvider: EntitlementProvider,
-            override val activationStore: ActivationStore,
-            override val activationIdFactory: ActivationIdGenerator,
-            override val loadBalancer: LoadBalancerService,
-            override val consulServer: String,
-            override val executionContext: ExecutionContext)
-        extends WhiskTriggersApi with WhiskServices {
-        override val whiskConfig = config
-        setVerbosity(verbosity)
-    }
-
-    class RulesApi(
-        val apipath: String,
-        val apiversion: String,
-        val verbosity: LogLevel)(
-            implicit override val actorSystem: ActorSystem,
-            override val entityStore: EntityStore,
-            override val iam: NamespaceProvider,
-            override val entitlementProvider: EntitlementProvider,
-            override val activationIdFactory: ActivationIdGenerator,
-            override val loadBalancer: LoadBalancerService,
-            override val consulServer: String,
-            override val executionContext: ExecutionContext)
-        extends WhiskRulesApi with WhiskServices {
-        override val whiskConfig = config
-        setVerbosity(verbosity)
-    }
-
-    class ActivationsApi(
-        val apipath: String,
-        val apiversion: String,
-        val verbosity: LogLevel)(
-            implicit override val activationStore: ActivationStore,
-            override val entitlementProvider: EntitlementProvider,
-            override val executionContext: ExecutionContext)
-        extends WhiskActivationsApi {
-        setVerbosity(verbosity)
-    }
-
-    class PackagesApi(
-        val apipath: String,
-        val apiversion: String,
-        val verbosity: LogLevel)(
-            implicit override val entityStore: EntityStore,
-            override val iam: NamespaceProvider,
-            override val entitlementProvider: EntitlementProvider,
-            override val activationIdFactory: ActivationIdGenerator,
-            override val loadBalancer: LoadBalancerService,
-            override val consulServer: String,
-            override val executionContext: ExecutionContext)
-        extends WhiskPackagesApi with WhiskServices {
-        override val whiskConfig = config
-        setVerbosity(verbosity)
-    }
-
-    class MetasApi(
-        override val apipath: String,
-        override val apiversion: String,
-        val verbosity: LogLevel)(
-            implicit override val authStore: AuthStore,
-            implicit val entityStore: EntityStore,
-            override val activationStore: ActivationStore,
-            override val iam: NamespaceProvider,
-            override val entitlementProvider: EntitlementProvider,
-            override val activationIdFactory: ActivationIdGenerator,
-            override val loadBalancer: LoadBalancerService,
-            override val consulServer: String,
-            override val actorSystem: ActorSystem,
-            override val executionContext: ExecutionContext)
-        extends WhiskMetaApi with WhiskServices {
-        override val whiskConfig = config
-        setVerbosity(verbosity)
-    }
-
-    /**
-     * Handles GET /invokers URI.
-     *
-     * @return JSON of invoker health
-     */
-    val internalInvokerHealth = {
-        (path("invokers") & get) {
-            complete {
-                loadBalancer.getInvokerHealth()
+            } ~ {
+                // web actions are distinct to separate the cors header
+                // and allow the actions themselves to respond to options
+                authenticate(basicauth) {
+                    user => web.routes(user)
+                } ~ web.routes()
             }
         }
     }
 
+    private val namespaces = new NamespacesApi(apipath, apiversion)
+    private val actions = new ActionsApi(apipath, apiversion)
+    private val triggers = new TriggersApi(apipath, apiversion)
+    private val rules = new RulesApi(apipath, apiversion)
+    private val activations = new ActivationsApi(apipath, apiversion)
+    private val packages = new PackagesApi(apipath, apiversion)
+    private val webexp = new WebActionsApi(Seq("experimental", "web"), WebApiDirectives.exp)
+    private val web = new WebActionsApi(Seq("web"), WebApiDirectives.web)
+
+    class NamespacesApi(
+        val apipath: String,
+        val apiversion: String)(
+            implicit override val entityStore: EntityStore,
+            override val entitlementProvider: EntitlementProvider,
+            override val executionContext: ExecutionContext,
+            override val logging: Logging)
+        extends WhiskNamespacesApi
+
+    class ActionsApi(
+        val apipath: String,
+        val apiversion: String)(
+            implicit override val actorSystem: ActorSystem,
+            override val entityStore: EntityStore,
+            override val activationStore: ActivationStore,
+            override val entitlementProvider: EntitlementProvider,
+            override val activationIdFactory: ActivationIdGenerator,
+            override val loadBalancer: LoadBalancerService,
+            override val consulServer: String,
+            override val executionContext: ExecutionContext,
+            override val logging: Logging,
+            override val whiskConfig: WhiskConfig)
+        extends WhiskActionsApi with WhiskServices {
+        logging.info(this, s"actionSequenceLimit '${whiskConfig.actionSequenceLimit}'")
+        assert(whiskConfig.actionSequenceLimit.toInt > 0)
+    }
+
+    class TriggersApi(
+        val apipath: String,
+        val apiversion: String)(
+            implicit override val actorSystem: ActorSystem,
+            implicit override val entityStore: EntityStore,
+            override val entitlementProvider: EntitlementProvider,
+            override val activationStore: ActivationStore,
+            override val activationIdFactory: ActivationIdGenerator,
+            override val loadBalancer: LoadBalancerService,
+            override val consulServer: String,
+            override val executionContext: ExecutionContext,
+            override val logging: Logging,
+            override val whiskConfig: WhiskConfig)
+        extends WhiskTriggersApi with WhiskServices
+
+    class RulesApi(
+        val apipath: String,
+        val apiversion: String)(
+            implicit override val actorSystem: ActorSystem,
+            override val entityStore: EntityStore,
+            override val entitlementProvider: EntitlementProvider,
+            override val activationIdFactory: ActivationIdGenerator,
+            override val loadBalancer: LoadBalancerService,
+            override val consulServer: String,
+            override val executionContext: ExecutionContext,
+            override val logging: Logging,
+            override val whiskConfig: WhiskConfig)
+        extends WhiskRulesApi with WhiskServices
+
+    class ActivationsApi(
+        val apipath: String,
+        val apiversion: String)(
+            implicit override val activationStore: ActivationStore,
+            override val entitlementProvider: EntitlementProvider,
+            override val executionContext: ExecutionContext,
+            override val logging: Logging)
+        extends WhiskActivationsApi
+
+    class PackagesApi(
+        val apipath: String,
+        val apiversion: String)(
+            implicit override val entityStore: EntityStore,
+            override val entitlementProvider: EntitlementProvider,
+            override val activationIdFactory: ActivationIdGenerator,
+            override val loadBalancer: LoadBalancerService,
+            override val consulServer: String,
+            override val executionContext: ExecutionContext,
+            override val logging: Logging,
+            override val whiskConfig: WhiskConfig)
+        extends WhiskPackagesApi with WhiskServices
 }

@@ -25,11 +25,10 @@ import scala.util.Success
 import akka.actor.ActorSystem
 import akka.actor.Props
 import akka.actor.actorRef2Scala
-import akka.event.Logging.LogLevel
 import whisk.common.Counter
 import whisk.common.Logging
 import whisk.common.TransactionId
-import whisk.core.connector.{ ActivationMessage => Message }
+import whisk.core.connector.ActivationMessage
 import whisk.core.connector.MessageConsumer
 
 /**
@@ -47,17 +46,14 @@ import whisk.core.connector.MessageConsumer
  */
 @throws[IllegalArgumentException]
 class Dispatcher(
-    verbosity: LogLevel,
     consumer: MessageConsumer,
     pollDuration: FiniteDuration,
     maxPipelineDepth: Int,
-    actorSystem: ActorSystem)
-    extends Registrar
-    with Logging {
+    actorSystem: ActorSystem)(
+        implicit logging: Logging)
+    extends Registrar {
 
-    setVerbosity(verbosity)
-
-    val activationFeed = actorSystem.actorOf(Props(new ActivationFeed(this: Logging, consumer, maxPipelineDepth, pollDuration, process)))
+    val activationFeed = actorSystem.actorOf(Props(new ActivationFeed(logging, consumer, maxPipelineDepth, pollDuration, process)))
 
     def start() = activationFeed ! ActivationFeed.FillQueueWithMessages
     def stop() = consumer.close()
@@ -72,32 +68,32 @@ class Dispatcher(
      */
     def process(topic: String, bytes: Array[Byte]) = {
         val raw = new String(bytes, "utf-8")
-        Message(raw) match {
+        ActivationMessage.parse(raw) match {
             case Success(m) =>
                 handlers foreach {
                     case (name, handler) => handleMessage(handler, m)
                 }
-            case Failure(t) => info(this, errorMsg(raw, t))
+            case Failure(t) => logging.info(this, errorMsg(raw, t))
         }
     }
 
-    private def handleMessage(handler: MessageHandler, msg: Message) = {
+    private def handleMessage(handler: MessageHandler, msg: ActivationMessage) = {
         implicit val tid = msg.transid
         implicit val executionContext = actorSystem.dispatcher
 
         Future {
             val count = counter.next()
-            debug(this, s"activeCount = $count while handling ${handler.name}")
+            logging.debug(this, s"activeCount = $count while handling ${handler.name}")
             handler.onMessage(msg) // returns a future which is flat-mapped via identity to hang onComplete
         } flatMap (identity) onComplete {
-            case Success(a) => debug(this, s"activeCount = ${counter.prev()} after handling ${handler.name}")
-            case Failure(t) => error(this, s"activeCount = ${counter.prev()} ${errorMsg(handler, t)}")
+            case Success(a) => logging.debug(this, s"activeCount = ${counter.prev()} after handling ${handler.name}")
+            case Failure(t) => logging.error(this, s"activeCount = ${counter.prev()} ${errorMsg(handler, t)}")
         }
     }
 
     private def inform(matchers: TrieMap[String, MessageHandler])(implicit transid: TransactionId) = {
         val names = matchers map { _._2.name } reduce (_ + "," + _)
-        debug(this, s"matching message to ${matchers.size} handlers: $names")
+        logging.debug(this, s"matching message to ${matchers.size} handlers: $names")
         matchers
     }
 

@@ -16,7 +16,6 @@
 
 var NodeActionRunner = require('../runner');
 var fs = require('fs');
-var whisk = require('./whisk');
 
 function NodeActionService(config, logger) {
     var Status = {
@@ -24,7 +23,7 @@ function NodeActionService(config, logger) {
         starting: 'starting',
         running: 'running',
         stopped: 'stopped'
-    }
+    };
 
     var status = Status.ready;
     var server = undefined;
@@ -63,11 +62,13 @@ function NodeActionService(config, logger) {
             var host = server.address().address;
             var port = server.address().port;
         });
-    }
+        //This is required as http server will auto disconnect in 2 minutes, this to not auto disconnect at all
+        server.timeout = 0;
+    };
 
     /** Returns a promise of a response to the /init invocation.
      *
-     *  req.body = { main: String, code: String, name: String }
+     *  req.body = { main: String, code: String, binary: Boolean }
      */
     this.initCode = function initCode(req) {
         if (status === Status.ready) {
@@ -90,9 +91,9 @@ function NodeActionService(config, logger) {
                 return Promise.reject(errorMessage(500, "Missing main/no code to execute."));
             }
         } else {
-            return Promise.reject(errorMessage(502, "Internal system error: system not ready."));
+            return Promise.reject(errorMessage(502, "Internal system error: system not ready, status: " + status));
         }
-    }
+    };
 
     /**
      * Returns a promise of a response to the /exec invocation.
@@ -122,14 +123,12 @@ function NodeActionService(config, logger) {
             });
         } else {
             logger.info('[runCode]', 'cannot schedule runCode due to status', status);
-            return Promise.reject(errorMessage(500, "Internal system error: container not ready."));
+            return Promise.reject(errorMessage(500, "Internal system error: container not ready, status: " + status));
         }
-    }
+    };
 
     function doInit(message) {
-        var context = newWhiskContext(config, logger);
-
-        userCodeRunner = new NodeActionRunner(context);
+        userCodeRunner = new NodeActionRunner();
 
         return userCodeRunner.init(message).then(function (result) {
             setStatus(Status.ready);
@@ -147,7 +146,6 @@ function NodeActionService(config, logger) {
     function doRun(req) {
         var msg = req.body || {};
 
-        userCodeRunner.whisk.setAuthKey(msg['api_key'], false);
         var props = [ 'api_key', 'namespace', 'action_name', 'activation_id', 'deadline' ];
         props.map(function (p) {
             process.env['__OW_' + p.toUpperCase()] = msg[p];
@@ -169,12 +167,8 @@ function NodeActionService(config, logger) {
     }
 }
 
-function newWhiskContext(config, logger) {
-    return new whisk(config.apiHost, logger);
-}
-
 NodeActionService.getService = function(config, logger) {
     return new NodeActionService(config, logger);
-}
+};
 
 module.exports = NodeActionService;

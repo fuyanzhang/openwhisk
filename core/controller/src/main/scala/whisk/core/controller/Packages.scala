@@ -35,10 +35,6 @@ import whisk.core.entity.types.EntityStore
 import whisk.http.ErrorResponse.terminate
 import whisk.http.Messages
 
-object WhiskPackagesApi {
-    def requiredProperties = WhiskEntityStore.requiredProperties
-}
-
 trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
     services: WhiskServices =>
 
@@ -74,14 +70,15 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
             entity(as[WhiskPackagePut]) { content =>
                 val request = content.resolve(entityName.namespace)
 
-                request.binding.map { b => info(this, "checking if package is accessible") }
+                request.binding.map { b => logging.info(this, "checking if package is accessible") }
                 val referencedentities = referencedEntities(request)
 
                 onComplete(entitlementProvider.check(user, Privilege.READ, referencedentities)) {
-                    case Success(true) =>
+                    case Success(_) =>
                         putEntity(WhiskPackage, entityStore, entityName.toDocId, overwrite,
                             update(request) _, () => create(request, entityName))
-                    case failure => rewriteEntitlementFailure(failure)
+                    case Failure(f) =>
+                        rewriteEntitlementFailure(f)
                 }
             }
         }
@@ -94,7 +91,7 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
      * - 405 Not Allowed
      */
     override def activate(user: Identity, entityName: FullyQualifiedEntityName, env: Option[Parameters])(implicit transid: TransactionId) = {
-        error(this, "activate is not permitted on packages")
+        logging.error(this, "activate is not permitted on packages")
         reject
     }
 
@@ -220,7 +217,7 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
                 content.publish getOrElse false,
                 // remove any binding annotation from PUT (always set by the controller)
                 (content.annotations getOrElse Parameters())
-                    -- WhiskPackage.bindingFieldName
+                    - WhiskPackage.bindingFieldName
                     ++ bindingAnnotation(content.binding))
         }
     }
@@ -247,19 +244,19 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
                 content.publish getOrElse wp.publish,
                 // override any binding annotation from PUT (always set by the controller)
                 (content.annotations getOrElse wp.annotations)
-                    -- WhiskPackage.bindingFieldName
+                    - WhiskPackage.bindingFieldName
                     ++ bindingAnnotation(content.binding orElse wp.binding)).
                 revision[WhiskPackage](wp.docinfo.rev)
         }
     }
 
-    private def rewriteEntitlementFailure(failure: Try[Boolean])(
+    private def rewriteEntitlementFailure(failure: Throwable)(
         implicit transid: TransactionId): RequestContext => Unit = {
-        info(this, s"rewriting failure $failure")
+        logging.info(this, s"rewriting failure $failure")
         failure match {
-            case Failure(RejectRequest(NotFound, _)) => terminate(BadRequest, Messages.bindingDoesNotExist)
-            case Failure(RejectRequest(Conflict, _)) => terminate(Conflict, Messages.requestedBindingIsNotValid)
-            case _                                   => super.handleEntitlementFailure(failure)
+            case RejectRequest(NotFound, _) => terminate(BadRequest, Messages.bindingDoesNotExist)
+            case RejectRequest(Conflict, _) => terminate(Conflict, Messages.requestedBindingIsNotValid)
+            case _                          => super.handleEntitlementFailure(failure)
         }
     }
 
@@ -285,30 +282,30 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
         wp.binding map {
             case b: Binding =>
                 val docid = b.fullyQualifiedName.toDocId
-                info(this, s"fetching package '$docid' for reference")
+                logging.info(this, s"fetching package '$docid' for reference")
                 getEntity(WhiskPackage, entityStore, docid, Some {
                     mergePackageWithBinding(Some { wp }) _
                 })
         } getOrElse {
             val pkg = ref map { _ inherit wp.parameters } getOrElse wp
-            info(this, s"fetching package actions in '${wp.fullPath}'")
+            logging.info(this, s"fetching package actions in '${wp.fullPath}'")
             val actions = WhiskAction.listCollectionInNamespace(entityStore, wp.fullPath, skip = 0, limit = 0) flatMap {
                 case Left(list) => Future.successful {
                     pkg withPackageActions (list map { o => WhiskPackageAction.serdes.read(o) })
                 }
                 case t => Future.failed {
-                    error(this, "unexpected result in package action lookup: $t")
+                    logging.error(this, "unexpected result in package action lookup: $t")
                     new IllegalStateException(s"unexpected result in package action lookup: $t")
                 }
             }
 
             onComplete(actions) {
                 case Success(p) =>
-                    info(this, s"[GET] entity success")
+                    logging.info(this, s"[GET] entity success")
                     complete(OK, p)
                 case Failure(t) =>
-                    error(this, s"[GET] failed: ${t.getMessage}")
-                    terminate(InternalServerError, t.getMessage)
+                    logging.error(this, s"[GET] failed: ${t.getMessage}")
+                    terminate(InternalServerError)
             }
         }
     }

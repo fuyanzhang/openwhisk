@@ -25,11 +25,10 @@ var child_process = require('child_process');
 var fs = require('fs');
 var path = require('path');
 
-function NodeActionRunner(whisk) {
+function NodeActionRunner() {
     // Use this ref inside closures etc.
     var thisRunner = this;
 
-    this.userScriptName = undefined;
     this.userScriptMain = undefined;
 
     // This structure is reset for every action invocation. It contains two fields:
@@ -41,15 +40,7 @@ function NodeActionRunner(whisk) {
         next      : function (result) { return; }
     };
 
-    this.whisk = modWhisk(whisk, callback);
-
     this.init = function(message) {
-        // Determining a sensible name for the action.
-        var name = typeof message.name === 'string' ? message.name.trim() : '';
-        name = name !== '' ? name : 'Anonymous User Action';
-
-        this.userScriptName = name;
-
         function assertMainIsFunction() {
             if (typeof thisRunner.userScriptMain !== 'function') {
                 throw "Action entrypoint '" + message.main + "' is not a function.";
@@ -57,9 +48,14 @@ function NodeActionRunner(whisk) {
         }
 
         // Loading the user code.
-        if(message.binary) {
+        if (message.binary) {
             // The code is a base64-encoded zip file.
             return unzipInTmpDir(message.code).then(function (moduleDir) {
+                if(!fs.existsSync(path.join(moduleDir, 'package.json')) &&
+                    !fs.existsSync(path.join(moduleDir, 'index.js'))) {
+                    return Promise.reject('Zipped actions must contain either package.json or index.js at the root.')
+                }
+
                 try {
                     thisRunner.userScriptMain = eval('require("' + moduleDir + '").' + message.main);
                     assertMainIsFunction();
@@ -76,16 +72,15 @@ function NodeActionRunner(whisk) {
         } else {
             // The code is a plain old JS file.
             try {
-                eval(message.code);
-                thisRunner.userScriptMain = eval(message.main);
-                assertMainIsFunction()
+                thisRunner.userScriptMain = eval('(function(){' + message.code + '\nreturn ' + message.main + '})()');
+                assertMainIsFunction();
                 // See comment above about 'true'; it has no specific meaning.
                 return Promise.resolve(true);
             } catch (e) {
                 return Promise.reject(e);
             }
         }
-    }
+    };
 
     // Returns a Promise with the result of the user code invocation.
     // The Promise is rejected iff the user code throws.
@@ -101,37 +96,27 @@ function NodeActionRunner(whisk) {
                     reject(e);
                 }
 
-                if (result !== thisRunner.whisk.async(false)) {
-                    // This branch handles all direct (non-async) returns, as well
-                    // as returned Promises.
+                // Non-promises/undefined instantly resolve.
+                Promise.resolve(result).then(function (resolvedResult) {
+                    // This happens, e.g. if you just have "return;"
+                    if (typeof resolvedResult === "undefined") {
+                        resolvedResult = {};
+                    }
+                    resolve(resolvedResult);
+                }).catch(function (error) {
+                    // A rejected Promise from the user code maps into a
+                    // successful promise wrapping a whisk-encoded error.
 
-                    // Non-promises/undefined instantly resolve.
-                    Promise.resolve(result).then(function (resolvedResult) {
-                        // This happens, e.g. if you just have "return;"
-                        if (typeof resolvedResult === "undefined") {
-                            resolvedResult = {};
-                        }
-                        resolve(resolvedResult);
-                    }).catch(function (error) {
-                        // A rejected Promise from the user code maps into a
-                        // successful promise wrapping a whisk-encoded error.
-
-                        // Special case if the user just called `reject()`.
-                        if (!error) {
-                            resolve({ error: {}})
-                        } else {
-                            resolve({ error: error });
-                        }
-                    });
-                } else {
-                    // Nothing to do in this 'else' branch. The user code returned the
-                    // 'async' signal, indicating that it will call .done or .error.
-                    // At that point, callback.next will be invoked, and the Promise will
-                    // be completed.
-                }
+                    // Special case if the user just called `reject()`.
+                    if (!error) {
+                        resolve({ error: {}});
+                    } else {
+                        resolve({ error: error });
+                    }
+                });
             }
         );
-    }
+    };
 
     // Helper function to copy a base64-encoded zip file to a temporary location,
     // decompress it into temporary directory, and return the name of that directory.
@@ -145,7 +130,7 @@ function NodeActionRunner(whisk) {
                 function (resolve, reject) {
                     var zipFile = path.join(tmpDir1, "action.zip");
                     fs.writeFile(zipFile, base64, "base64", function (err) {
-                        if(err) {
+                        if (err) {
                             reject("There was an error reading the action archive.");
                         }
                         resolve(zipFile);
@@ -168,7 +153,7 @@ function NodeActionRunner(whisk) {
         return new Promise(
             function (resolve, reject) {
                 child_process.exec(cmd, function (error, stdout, stderr) {
-                    if(error) {
+                    if (error) {
                         reject(stderr.trim());
                     } else {
                         resolve(stdout.trim());
@@ -177,33 +162,6 @@ function NodeActionRunner(whisk) {
             }
         );
     }
-}
-
-/**
- * override whisk._terminate to create a continuation and log occurrences of
- * calling whisk._terminate more than once -- a trampoline pattern.
- *
- * @param whisk is an instance of Whisk (see whisk.js) that is in
- * the scope of the user code to run.  This encapsulates the whisk
- * SDK available to user code.
- *
- * @param callback a reference to an object matching the schema of
- * `callback` above. It includes a continuation callback and a field marking
- * whether it was invoked already.
- *
- */
-function modWhisk(whisk, callback) {
-    whisk._terminate = function(r) {
-        if (callback.completed === undefined) {
-            callback.completed = true;
-            callback.next(r);
-        } else {
-            // The warning doesn't mention _terminate because users aren't supposed to
-            // call it directly.
-            console.log('Warning: whisk.done() or whisk.error() called more than once.');
-        }
-    };
-    return whisk;
 }
 
 module.exports = NodeActionRunner;

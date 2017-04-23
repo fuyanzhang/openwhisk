@@ -13,8 +13,8 @@ echo "Docker Info:"
 docker info
 
 # Python
-sudo apt-get -y install python-pip
 pip install --user jsonschema
+pip install --user couchdb
 
 # Ansible
 pip install --user ansible==2.1.2.0

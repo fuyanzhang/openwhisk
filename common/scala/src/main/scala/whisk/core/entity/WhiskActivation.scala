@@ -62,7 +62,7 @@ case class WhiskActivation(
     publish: Boolean = false,
     annotations: Parameters = Parameters(),
     duration: Option[Long] = None)
-    extends WhiskEntity(EntityName(activationId())) {
+    extends WhiskEntity(EntityName(activationId.asString)) {
 
     require(cause != null, "cause undefined")
     require(start != null, "start undefined")
@@ -89,35 +89,8 @@ case class WhiskActivation(
         }
     }
 
-    def withoutLogs = WhiskActivation(
-        namespace = namespace,
-        name = name,
-        subject = subject,
-        activationId = activationId,
-        start = start,
-        end = end,
-        cause = cause,
-        response = response,
-        logs = ActivationLogs(),
-        version = version,
-        publish = publish,
-        annotations = annotations,
-        duration = duration)
-
-    def withLogs(logs: ActivationLogs) = WhiskActivation(
-        namespace = namespace,
-        name = name,
-        subject = subject,
-        activationId = activationId,
-        start = start,
-        end = end,
-        cause = cause,
-        response = response,
-        logs = logs,
-        version = version,
-        publish = publish,
-        annotations = annotations,
-        duration = duration)
+    def withoutLogs = copy(logs = ActivationLogs()).revision[WhiskActivation](rev)
+    def withLogs(logs: ActivationLogs) = copy(logs = logs).revision[WhiskActivation](rev)
 }
 
 object WhiskActivation
@@ -140,6 +113,8 @@ object WhiskActivation
     override val collectionName = "activations"
     override implicit val serdes = jsonFormat13(WhiskActivation.apply)
 
-    override val cacheEnabled = true
+    // Caching activations doesn't make much sense in the common case as usually,
+    // an activation is only asked for once.
+    override val cacheEnabled = false
     override def cacheKeyForUpdate(w: WhiskActivation) = w.docid.asDocInfo
 }

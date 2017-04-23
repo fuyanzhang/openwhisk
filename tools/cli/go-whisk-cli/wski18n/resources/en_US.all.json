@@ -120,8 +120,8 @@
     "translation": "create a new package"
   },
   {
-    "id": "Package creation failed: {{.err}}",
-    "translation": "Package creation failed: {{.err}}"
+    "id": "Unable to create package '{{.name}}': {{.err}}",
+    "translation": "Unable to create package '{{.name}}': {{.err}}"
   },
   {
     "id": "{{.ok}} created package {{.name}}\n",
@@ -144,8 +144,8 @@
     "translation": "get package"
   },
   {
-    "id": "Package get failed: {{.err}}",
-    "translation": "Package get failed: {{.err}}"
+    "id": "Unable to get package '{{.name}}': {{.err}}",
+    "translation": "Unable to get package '{{.name}}': {{.err}}"
   },
   {
     "id": "{{.ok}} got package {{.name}}\n",
@@ -156,8 +156,8 @@
     "translation": "delete package"
   },
   {
-    "id": "Package delete failed: {{.err}}",
-    "translation": "Package delete failed: {{.err}}"
+    "id": "Unable to delete package '{{.name}}': {{.err}}",
+    "translation": "Unable to delete package '{{.name}}': {{.err}}"
   },
   {
     "id": "{{.ok}} deleted package {{.name}}\n",
@@ -421,8 +421,12 @@
     "translation": "get rule status"
   },
   {
-    "id": "Unable to retrieve rule '{{.name}}': {{.err}}",
-    "translation": "Unable to retrieve rule '{{.name}}': {{.err}}"
+    "id": "Unable to get rule '{{.name}}': {{.err}}",
+    "translation": "Unable to get rule '{{.name}}': {{.err}}"
+  },
+  {
+    "id": "Unable to get status of rule '{{.name}}': {{.err}}",
+    "translation": "Unable to get status of rule '{{.name}}': {{.err}}"
   },
   {
     "id": "{{.ok}} rule {{.name}} is {{.status}}\n",
@@ -772,8 +776,8 @@
     "translation": "Unable to parse action command arguments: {{.err}}"
   },
   {
-    "id": "Unable to create action: {{.err}}",
-    "translation": "Unable to create action: {{.err}}"
+    "id": "Unable to create action '{{.name}}': {{.err}}",
+    "translation": "Unable to create action '{{.name}}': {{.err}}"
   },
   {
     "id": "{{.ok}} created action {{.name}}\n",
@@ -824,8 +828,8 @@
     "translation": "delete action"
   },
   {
-    "id": "Unable to delete action: {{.err}}",
-    "translation": "Unable to delete action: {{.err}}"
+    "id": "Unable to delete action '{{.name}}': {{.err}}",
+    "translation": "Unable to delete action '{{.name}}': {{.err}}"
   },
   {
     "id": "{{.ok}} deleted action {{.name}}\n",
@@ -844,8 +848,8 @@
     "translation": "Could not find 'main' method in '{{.name}}'"
   },
   {
-    "id": "Unable to obtain action '{{.name}}' to copy: {{.err}}",
-    "translation": "Unable to obtain action '{{.name}}' to copy: {{.err}}"
+    "id": "Unable to get action '{{.name}}': {{.err}}",
+    "translation": "Unable to get action '{{.name}}': {{.err}}"
   },
   {
     "id": "File '{{.name}}' is not a valid file or it does not exist: {{.err}}",
@@ -880,8 +884,8 @@
     "translation": "treat ACTION as comma separated sequence of actions to invoke"
   },
   {
-    "id": "the `KIND` of the action runtime (example: swift:3, nodejs:6)",
-    "translation": "the `KIND` of the action runtime (example: swift:3, nodejs:6)"
+    "id": "the `KIND` of the action runtime (example: swift:default, nodejs:default)",
+    "translation": "the `KIND` of the action runtime (example: swift:default, nodejs:default)"
   },
   {
     "id": "the name of the action entry point (function or fully-qualified method name when applicable)",
@@ -908,8 +912,8 @@
     "translation": "blocking invoke"
   },
   {
-    "id": "show only activation result if a blocking activation (unless there is a failure)",
-    "translation": "show only activation result if a blocking activation (unless there is a failure)"
+    "id": "blocking invoke; show only activation result (unless there is a failure)",
+    "translation": "blocking invoke; show only activation result (unless there is a failure)"
   },
   {
     "id": "exclude the first `SKIP` number of actions from the result",
@@ -944,8 +948,8 @@
     "translation": "get activation"
   },
   {
-    "id": "Unable to obtain activation record for '{{.id}}': {{.err}}",
-    "translation": "Unable to obtain activation record for '{{.id}}': {{.err}}"
+    "id": "Unable to get activation '{{.id}}': {{.err}}",
+    "translation": "Unable to get activation '{{.id}}': {{.err}}"
   },
   {
     "id": "activation result for /{{.namespace}}/{{.name}} ({{.status}} at {{.time}})\n",
@@ -960,12 +964,12 @@
     "translation": "get the logs of an activation"
   },
   {
-    "id": "Unable to obtain logs for activation '{{.id}}': {{.err}}",
-    "translation": "Unable to obtain logs for activation '{{.id}}': {{.err}}"
+    "id": "Unable to get logs for activation '{{.id}}': {{.err}}",
+    "translation": "Unable to get logs for activation '{{.id}}': {{.err}}"
   },
   {
-    "id": "Unable to obtain result information for activation '{{.id}}': {{.err}}",
-    "translation": "Unable to obtain result information for activation '{{.id}}': {{.err}}"
+    "id": "Unable to get result for activation '{{.id}}': {{.err}}",
+    "translation": "Unable to get result for activation '{{.id}}': {{.err}}"
   },
   {
     "id": "poll continuously for log messages from currently running actions",
@@ -1208,16 +1212,16 @@
     "translation": "get API"
   },
   {
-    "id": "Unable to get API: {{.err}}",
-    "translation": "Unable to get API: {{.err}}"
+    "id": "Unable to get API '{{.name}}': {{.err}}",
+    "translation": "Unable to get API '{{.name}}': {{.err}}"
   },
   {
     "id": "delete an API",
     "translation": "delete an API"
   },
   {
-    "id": "Unable to delete action: {{.err}}",
-    "translation": "Unable to delete action: {{.err}}"
+    "id": "Unable to delete API: {{.err}}",
+    "translation": "Unable to delete API: {{.err}}"
   },
   {
     "id": "{{.ok}} deleted API {{.basepath}}\n",
@@ -1326,5 +1330,117 @@
   {
     "id": "Cannot use value '{{.arg}}' for shared.",
     "translation": "Cannot use value '{{.arg}}' for shared."
+  },
+  {
+    "id": "Action",
+    "translation": "Action"
+  },
+  {
+    "id": "Verb",
+    "translation": "Verb"
+  },
+  {
+    "id": "API Name",
+    "translation": "API Name"
+  },
+  {
+    "id": "URL",
+    "translation": "URL"
+  },
+  {
+    "id": "Base path",
+    "translation": "Base path"
+  },
+  {
+    "id": "Path",
+    "translation": "Path"
+  },
+  {
+    "id": "display full description of each API",
+    "translation": "display full description of each API"
+  },
+  {
+    "id": "An API host must be provided.",
+    "translation": "An API host must be provided."
+  },
+  {
+    "id": "Request accepted, but processing not completed yet.",
+    "translation": "Request accepted, but processing not completed yet."
+  },
+  {
+    "id": "{{.ok}} invoked /{{.namespace}}/{{.name}}, but the request has not yet finished, with id {{.id}}\n",
+    "translation": "{{.ok}} invoked /{{.namespace}}/{{.name}}, but the request has not yet finished, with id {{.id}}\n"
+  },
+  {
+    "id": "treat ACTION as a web action, a raw HTTP web action, or as a standard action; yes | true = web action, raw = raw HTTP web action, no | false = standard action",
+    "translation": "treat ACTION as a web action, a raw HTTP web action, or as a standard action; yes | true = web action, raw = raw HTTP web action, no | false = standard action"
+  },
+  {
+    "id": "Invalid argument '{{.arg}}' for --web flag. Valid input consist of 'yes', 'true', 'raw', 'false', or 'no'.",
+    "translation": "Invalid argument '{{.arg}}' for --web flag. Valid input consist of 'yes', 'true', 'raw', 'false', or 'no'."
+  },
+  {
+    "id": "API action does not exist",
+    "translation": "API action does not exist"
+  },
+  {
+    "id": "API action '{{.name}}' is not a web action. Issue 'wsk action update {{.name}} --web true' to convert the action to a web action.",
+    "translation": "API action '{{.name}}' is not a web action. Issue 'wsk action update {{.name}} --web true' to convert the action to a web action."
+  },
+  {
+    "id": "Invalid configuration. The x-openwhisk stanza is missing.",
+    "translation": "Invalid configuration. The x-openwhisk stanza is missing."
+  },
+  {
+    "id": "Internal error. Missing value stanza in API configuration response",
+    "translation": "Internal error. Missing value stanza in API configuration response"
+  },
+  {
+    "id": "Internal error. Missing apidoc stanza in API configuration",
+    "translation": "Internal error. Missing apidoc stanza in API configuration"
+  },
+  {
+    "id": "Missing operationId field in API configuration for operation {{.op}}",
+    "translation": "Missing operationId field in API configuration for operation {{.op}}"
+  },
+  {
+    "id": "Missing x-openwhisk stanza in API configuration for operation {{.op}}",
+    "translation": "Missing x-openwhisk stanza in API configuration for operation {{.op}}"
+  },
+  {
+    "id": "Missing x-openwhisk.namespace field in API configuration for operation {{.op}}",
+    "translation": "Missing x-openwhisk.namespace field in API configuration for operation {{.op}}"
+  },
+  {
+    "id": "Missing x-openwhisk.action field in API configuration for operation {{.op}}",
+    "translation": "Missing x-openwhisk.action field in API configuration for operation {{.op}}"
+  },
+  {
+    "id": "Missing x-openwhisk.url field in API configuration for operation {{.op}}",
+    "translation": "Missing x-openwhisk.url field in API configuration for operation {{.op}}"
+  },
+  {
+    "id": "work with APIs",
+    "translation": "work with APIs"
+  },
+  {
+    "id": "create a new API",
+    "translation": "create a new API"
+  },
+  {
+    "id": "get API details",
+    "translation": "get API details"
+  },
+  {
+    "id": "delete an API",
+    "translation": "delete an API"
+  },
+  {
+    "id": "list APIs",
+    "translation": "list APIs"
+  },
+  {
+    "id": "Set the web action response TYPE. Possible values are html, http, json, text, svg",
+    "translation": "Set the web action response TYPE. Possible values are html, http, json, text, svg"
   }
 ]

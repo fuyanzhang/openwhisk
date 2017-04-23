@@ -37,6 +37,7 @@ import spray.http.MediaTypes.`text/plain`
 import spray.httpx.SprayJsonSupport.sprayJsonMarshaller
 import spray.httpx.marshalling
 import spray.httpx.marshalling.ToResponseMarshallable.isMarshallable
+import spray.routing.AuthenticationFailedRejection
 import spray.routing.Directive.pimpApply
 import spray.routing.Directives
 import spray.routing.HttpService
@@ -45,25 +46,28 @@ import spray.routing.Route
 import spray.routing.directives.DebuggingDirectives
 import spray.routing.directives.LogEntry
 import spray.routing.directives.LoggingMagnet.forMessageFromFullShow
+import whisk.common.LogMarker
+import whisk.common.LogMarkerToken
 import whisk.common.Logging
+import whisk.common.LoggingMarkers
 import whisk.common.TransactionCounter
 import whisk.common.TransactionId
-import akka.event.Logging
-import whisk.common.LoggingMarkers
-import whisk.common.LogMarkerToken
-import whisk.common.LogMarker
-import whisk.common.LogMarker
 
 /**
  * This trait extends the spray HttpService trait with logging and transaction counting
  * facilities common to all OpenWhisk REST services.
  */
-trait BasicHttpService extends HttpService with TransactionCounter with Logging {
+trait BasicHttpService extends HttpService with TransactionCounter {
 
     /**
      * Gets the actor context.
      */
     implicit def actorRefFactory: ActorContext
+
+    /**
+     * Gets the logging
+     */
+    implicit def logging: Logging
 
     /**
      * Gets the routes implemented by the HTTP service.
@@ -97,10 +101,16 @@ trait BasicHttpService extends HttpService with TransactionCounter with Logging 
     protected val assignId = extract(_ => transid())
 
     /** Rejection handler to terminate connection on a bad request. Delegates to Spray handler. */
+
     protected def customRejectionHandler(implicit transid: TransactionId) = RejectionHandler {
-        case rejections =>
-            info(this, s"[REJECT] $rejections")
-            BasicHttpService.customRejectionHandler.apply(rejections)
+        case rejections => {
+            logging.info(this, s"[REJECT] $rejections")
+            rejections match {
+                case AuthenticationFailedRejection(cause, challengeHeaders) :: _ =>
+                    BasicHttpService.customRejectionHandler.apply(rejections.takeRight(1))
+                case _ => BasicHttpService.customRejectionHandler.apply(rejections)
+            }
+        }
     }
 
     /** Generates log entry for every request. */
@@ -118,10 +128,12 @@ trait BasicHttpService extends HttpService with TransactionCounter with Logging 
             val p = req.uri.path.toString
             val l = loglevelForRoute(p)
 
+            val name = "BasicHttpService"
+
             val token = LogMarkerToken("http", s"${m.toLowerCase}.${res.status.intValue}", LoggingMarkers.count)
             val marker = LogMarker(token, tid.deltaToStart, Some(tid.deltaToStart))
 
-            Some(LogEntry(s"[$tid] $marker", l))
+            Some(LogEntry(s"[$tid] [$name] $marker", l))
         case _ => None // other kind of responses
     }
 }
